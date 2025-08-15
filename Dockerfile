@@ -1,19 +1,22 @@
-# GitLab MCP Server - Standard Dockerfile for Smithery.ai
+# GitLab MCP Server - Standalone Dockerfile for Smithery.ai deployments
 # For LibreChat integration, copy this file to your LibreChat root as Dockerfile.mcp-gitlab
 
 FROM node:20-alpine AS builder
 
+# Install git for cloning
+RUN apk add --no-cache git
+
 WORKDIR /app
 
-# Copy package files
-COPY package.json package-lock.json* ./
+# Clone the repository
+RUN git clone https://github.com/ttpears/gitlab-mcp.git .
 
 # Install all dependencies (including dev deps for building)
-RUN npm install
-
-# Copy source code
-COPY src ./src
-COPY tsconfig.json ./
+RUN if [ -f package-lock.json ]; then \
+      npm ci; \
+    else \
+      npm install; \
+    fi
 
 # Build the application
 RUN npm run build
