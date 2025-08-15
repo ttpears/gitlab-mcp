@@ -76,11 +76,36 @@ mcpServers:
 docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 ```
 
-### Smithery (NPM-style install)
+### Smithery.ai (Recommended for Easy Installation)
 
-```bash
-npx @smithery/cli install gitlab-mcp-server
-```
+1. **Visit [smithery.ai](https://smithery.ai)**
+2. **Search for "gitlab-mcp-server"**
+3. **Select the server** from search results
+4. **Navigate to the "Auto" tab** and select "LibreChat"
+5. **Copy and run** the generated installation command:
+   ```bash
+   # Example command (actual command from Smithery)
+   npx @smithery/cli install gitlab-mcp-server
+   ```
+6. **Configure in your `librechat.yml`** (Smithery will provide the exact configuration):
+   ```yaml
+   mcpServers:
+     gitlab:
+       command: npx
+       args: ["gitlab-mcp-server"]
+       type: stdio
+       env:
+         GITLAB_URL: "https://gitlab.com"
+         GITLAB_AUTH_MODE: "hybrid"
+         GITLAB_SHARED_ACCESS_TOKEN: "${GITLAB_SHARED_ACCESS_TOKEN:-}"
+       customUserVars:
+         GITLAB_ACCESS_TOKEN:
+           title: "GitLab Personal Access Token"
+           description: "Your GitLab PAT with 'api' or 'read_api' scope"
+           type: password
+           required: false
+   ```
+7. **Restart LibreChat** to initialize the server connection
 
 ### Manual Installation
 

@@ -1,28 +1,32 @@
 {
   "name": "gitlab-mcp-server",
-  "description": "GitLab MCP Server with GraphQL discovery and schema introspection",
+  "description": "GitLab MCP Server with comprehensive search capabilities and GraphQL discovery - perfect for LLM exploration",
   "version": "1.0.0",
-  "homepage": "https://github.com/your-username/gitlab-mcp",
-  "author": "Your Name <your.email@example.com>",
+  "homepage": "https://github.com/ttpears/gitlab-mcp",
+  "author": "ttpears <noreply@github.com>",
   "license": "MIT",
-  "keywords": ["mcp", "gitlab", "graphql", "model-context-protocol", "api"],
+  "keywords": ["mcp", "gitlab", "graphql", "model-context-protocol", "api", "search", "llm", "librechat"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/gitlab-mcp.git"
+    "url": "https://github.com/ttpears/gitlab-mcp.git"
   },
   "mcpServers": {
     "gitlab": {
-      "command": "node",
-      "args": ["dist/index.js"],
-      "description": "GitLab GraphQL API integration",
+      "command": "npx",
+      "args": ["gitlab-mcp-server"],
+      "description": "GitLab MCP Server with comprehensive search and GraphQL discovery capabilities",
       "env": {
         "GITLAB_URL": {
           "description": "GitLab instance URL (default: https://gitlab.com)",
           "default": "https://gitlab.com"
         },
-        "GITLAB_ACCESS_TOKEN": {
-          "description": "GitLab personal access token with read_api or api scope",
-          "required": true
+        "GITLAB_AUTH_MODE": {
+          "description": "Authentication mode: shared, per-user, or hybrid (default: hybrid)",
+          "default": "hybrid"
+        },
+        "GITLAB_SHARED_ACCESS_TOKEN": {
+          "description": "Optional shared GitLab access token for read-only operations (read_api scope)",
+          "required": false
         },
         "GITLAB_MAX_PAGE_SIZE": {
           "description": "Maximum page size for paginated queries (1-100)",
@@ -34,6 +38,38 @@
         }
       },
       "tools": [
+        {
+          "name": "search_gitlab",
+          "description": "Global search across GitLab (projects, issues, merge requests) - ideal for LLM exploration"
+        },
+        {
+          "name": "search_projects",
+          "description": "Search for GitLab projects by name or description"
+        },
+        {
+          "name": "search_issues",
+          "description": "Search for issues globally or within specific projects with state filtering"
+        },
+        {
+          "name": "search_merge_requests",
+          "description": "Search for merge requests and code changes with advanced filters"
+        },
+        {
+          "name": "search_users",
+          "description": "Search for GitLab users by username or name"
+        },
+        {
+          "name": "search_groups",
+          "description": "Search for GitLab groups and organizations"
+        },
+        {
+          "name": "browse_repository",
+          "description": "Browse repository files and folder structure for code exploration"
+        },
+        {
+          "name": "get_file_content",
+          "description": "Get the content of specific files from GitLab repositories for analysis"
+        },
         {
           "name": "get_current_user",
           "description": "Get information about the current authenticated GitLab user"
@@ -56,11 +92,11 @@
         },
         {
           "name": "create_issue",
-          "description": "Create a new issue in a GitLab project"
+          "description": "Create a new issue in a GitLab project (requires user authentication)"
         },
         {
           "name": "create_merge_request",
-          "description": "Create a new merge request in a GitLab project"
+          "description": "Create a new merge request in a GitLab project (requires user authentication)"
         },
         {
           "name": "execute_custom_query",

@@ -60,13 +60,11 @@ mcpServers:
 
 ---
 
-# Configuration for development with local npm package
+# Configuration for Smithery.ai installation (stdio transport)
 # mcpServers:
 #   gitlab:
 #     command: npx
-#     args: 
-#       - "-y"
-#       - "gitlab-mcp-server"
+#     args: ["gitlab-mcp-server"]
 #     type: stdio
 #     env:
 #       GITLAB_URL: "${GITLAB_URL:-https://gitlab.com}"
@@ -77,3 +75,4 @@ mcpServers:
 #         title: "GitLab Personal Access Token"
 #         description: "Your GitLab PAT with 'api' or 'read_api' scope"
 #         type: password
+#         required: false
