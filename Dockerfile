@@ -8,8 +8,8 @@ WORKDIR /app
 # Copy package files
 COPY package.json package-lock.json* ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install all dependencies (including dev deps for building)
+RUN npm install
 
 # Copy source code
 COPY src ./src
@@ -17,6 +17,9 @@ COPY tsconfig.json ./
 
 # Build the application
 RUN npm run build
+
+# Remove dev dependencies after build
+RUN npm prune --omit=dev
 
 FROM node:20-alpine AS runtime
 

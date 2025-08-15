@@ -25,7 +25,6 @@ export class GitLabGraphQLClient {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      timeout: this.config.defaultTimeout,
     });
   }
 

@@ -9,8 +9,7 @@
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "jest",
-    "prepublishOnly": "npm run build",
-    "postinstall": "npm run build"
+    "prepublishOnly": "npm run build"
   },
   "bin": {
     "gitlab-mcp-server": "dist/index.js"

@@ -3,6 +3,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import * as http from 'http';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -15,7 +16,7 @@ import { tools } from './tools.js';
 
 class GitLabMCPServer {
   private server: Server;
-  private gitlabClient: GitLabGraphQLClient;
+  private gitlabClient!: GitLabGraphQLClient;
 
   constructor() {
     this.server = new Server(
@@ -113,11 +114,20 @@ class GitLabMCPServer {
       
       if (useHttp && port) {
         // HTTP/SSE transport for LibreChat integration
-        const transport = new SSEServerTransport('/message', {
-          port: port,
+        const httpServer = http.createServer((req, res) => {
+          if (req.url === '/message' && req.method === 'POST') {
+            // Handle SSE connection
+            const transport = new SSEServerTransport('/message', res);
+            this.server.connect(transport);
+          } else {
+            res.writeHead(404);
+            res.end();
+          }
         });
-        await this.server.connect(transport);
-        console.error(`GitLab MCP Server running on HTTP port ${port}`);
+        
+        httpServer.listen(port, () => {
+          console.error(`GitLab MCP Server running on HTTP port ${port}`);
+        });
       } else {
         // Default to stdio transport
         const transport = new StdioServerTransport();

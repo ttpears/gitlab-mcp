@@ -18,7 +18,7 @@ const UserCredentialsSchema = z.object({
 }).optional();
 
 // Helper to add user credentials to input schemas
-const withUserAuth = (baseSchema: z.ZodSchema, required = false) => {
+const withUserAuth = (baseSchema: z.ZodObject<any>, required = false) => {
   if (required) {
     return baseSchema.extend({
       userCredentials: z.object({
