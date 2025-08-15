@@ -5,6 +5,7 @@ version: 1.0.0
 author: ttpears
 homepage: https://github.com/ttpears/gitlab-mcp
 repository: https://github.com/ttpears/gitlab-mcp
+runtime: "typescript"
 
 # Server configuration
 server:
