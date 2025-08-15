@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.gitignore
+*.md
+.env*
+.DS_Store
+*.log
+coverage
+.nyc_output
+jest.config.js
+*.test.ts
+*.test.js

@@ -1,0 +1,76 @@
+{
+  "name": "gitlab-mcp-server",
+  "description": "GitLab MCP Server with GraphQL discovery and schema introspection",
+  "version": "1.0.0",
+  "homepage": "https://github.com/your-username/gitlab-mcp",
+  "author": "Your Name <your.email@example.com>",
+  "license": "MIT",
+  "keywords": ["mcp", "gitlab", "graphql", "model-context-protocol", "api"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/gitlab-mcp.git"
+  },
+  "mcpServers": {
+    "gitlab": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "description": "GitLab GraphQL API integration",
+      "env": {
+        "GITLAB_URL": {
+          "description": "GitLab instance URL (default: https://gitlab.com)",
+          "default": "https://gitlab.com"
+        },
+        "GITLAB_ACCESS_TOKEN": {
+          "description": "GitLab personal access token with read_api or api scope",
+          "required": true
+        },
+        "GITLAB_MAX_PAGE_SIZE": {
+          "description": "Maximum page size for paginated queries (1-100)",
+          "default": "50"
+        },
+        "GITLAB_TIMEOUT": {
+          "description": "Request timeout in milliseconds",
+          "default": "30000"
+        }
+      },
+      "tools": [
+        {
+          "name": "get_current_user",
+          "description": "Get information about the current authenticated GitLab user"
+        },
+        {
+          "name": "get_projects",
+          "description": "List projects accessible to the current user with pagination support"
+        },
+        {
+          "name": "get_project", 
+          "description": "Get detailed information about a specific GitLab project by full path"
+        },
+        {
+          "name": "get_issues",
+          "description": "Get issues from a specific GitLab project with pagination support"
+        },
+        {
+          "name": "get_merge_requests",
+          "description": "Get merge requests from a specific GitLab project with pagination support"
+        },
+        {
+          "name": "create_issue",
+          "description": "Create a new issue in a GitLab project"
+        },
+        {
+          "name": "create_merge_request",
+          "description": "Create a new merge request in a GitLab project"
+        },
+        {
+          "name": "execute_custom_query",
+          "description": "Execute custom GraphQL queries against the GitLab API"
+        },
+        {
+          "name": "get_available_queries",
+          "description": "Get list of available GraphQL queries and mutations from schema introspection"
+        }
+      ]
+    }
+  }
+}
