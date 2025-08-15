@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "GitLab MCP Server with GraphQL discovery",
   "main": "dist/index.js",
+  "module": "./src/index.ts",
   "type": "module",
   "scripts": {
     "build": "tsc",
