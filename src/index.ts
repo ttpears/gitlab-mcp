@@ -2,6 +2,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -106,9 +107,23 @@ class GitLabMCPServer {
         console.error('No shared access token provided. Schema will be introspected when user credentials are provided.');
       }
       
-      const transport = new StdioServerTransport();
-      await this.server.connect(transport);
-      console.error('GitLab MCP Server running on stdio');
+      // Determine transport based on environment
+      const port = process.env.PORT ? parseInt(process.env.PORT) : null;
+      const useHttp = process.env.MCP_TRANSPORT === 'http' || port;
+      
+      if (useHttp && port) {
+        // HTTP/SSE transport for LibreChat integration
+        const transport = new SSEServerTransport('/message', {
+          port: port,
+        });
+        await this.server.connect(transport);
+        console.error(`GitLab MCP Server running on HTTP port ${port}`);
+      } else {
+        // Default to stdio transport
+        const transport = new StdioServerTransport();
+        await this.server.connect(transport);
+        console.error('GitLab MCP Server running on stdio');
+      }
     } catch (error) {
       console.error('Failed to start server:', error);
       process.exit(1);

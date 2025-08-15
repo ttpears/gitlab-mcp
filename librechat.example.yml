@@ -1,102 +1,79 @@
 # Example librechat.yml configuration for GitLab MCP integration
-version: 1.1.5
+# For LibreChat MCP documentation: https://www.librechat.ai/docs/features/mcp
 
-# MCP (Model Context Protocol) Configuration
-mcp:
-  # GitLab MCP Server with Hybrid Authentication
+mcpServers:
   gitlab:
-    name: "GitLab"
-    description: "GitLab GraphQL API integration with per-user authentication and optional shared read-only access"
+    # HTTP transport configuration (recommended)
+    type: streamable-http
+    url: "http://localhost:8008/message"
     
-    # Docker configuration (recommended for LibreChat)
-    docker:
-      image: "gitlab-mcp-server"
-      containerName: "gitlab-mcp-server"
+    # Server configuration
+    serverInstructions: |
+      You have access to GitLab through the GitLab MCP server. This server provides comprehensive search 
+      and exploration capabilities perfect for analyzing GitLab repositories, issues, and merge requests.
       
-    # Environment variables for GitLab connection
-    env:
-      GITLAB_URL: "${GITLAB_URL:-https://gitlab.com}"
-      # Optional: Shared read-only token for public operations
-      GITLAB_SHARED_ACCESS_TOKEN: "${GITLAB_SHARED_ACCESS_TOKEN:-}"
-      # Authentication mode: 'shared', 'per-user', or 'hybrid' (default)
-      GITLAB_AUTH_MODE: "${GITLAB_AUTH_MODE:-hybrid}"
-      GITLAB_MAX_PAGE_SIZE: "${GITLAB_MAX_PAGE_SIZE:-50}"
-      GITLAB_TIMEOUT: "${GITLAB_TIMEOUT:-30000}"
+      Key capabilities:
+      - Search across projects, issues, and merge requests globally
+      - Browse repository structure and read file contents
+      - Create issues and merge requests (with user authentication)
+      - Find users and groups
+      
+      For write operations, users will be prompted for their GitLab Personal Access Token.
     
-    # User Authentication Configuration
-    userAuth:
-      enabled: true
-      description: "Users can provide their own GitLab credentials for full access including write operations"
-      fields:
-        - name: "accessToken"
-          type: "password"
-          required: true
-          description: "Your GitLab Personal Access Token (with api or read_api scope)"
-        - name: "gitlabUrl"
-          type: "url"
-          required: false
-          description: "GitLab instance URL (optional, uses server default if not provided)"
-          default: "${GITLAB_URL:-https://gitlab.com}"
+    # Timeouts
+    initTimeout: 30000
+    timeout: 120000
     
-    # Available tools
-    tools:
-      # Read-only operations (can use shared token if available)
-      - name: "get_project"
-        description: "Get detailed project information (read-only, can use shared token)"
-        auth: "optional"
-      - name: "get_issues"
-        description: "Get project issues (read-only, can use shared token)"
-        auth: "optional"
-      - name: "get_merge_requests"
-        description: "Get project merge requests (read-only, can use shared token)"
-        auth: "optional"
-      - name: "execute_custom_query"
-        description: "Execute custom GraphQL queries (auth required for private data)"
-        auth: "optional"
-      - name: "get_available_queries"
-        description: "List available GraphQL queries and mutations"
-        auth: "optional"
-        
-      # User authentication required
-      - name: "get_current_user"
-        description: "Get current GitLab user information"
-        auth: "required"
-      - name: "get_projects" 
-        description: "List accessible GitLab projects (shows private projects with auth)"
-        auth: "required"
-        
-      # Write operations (always require user authentication)
-      - name: "create_issue"
-        description: "Create a new issue (requires user authentication)"
-        auth: "required"
-        permissions: "write"
-      - name: "create_merge_request"
-        description: "Create a new merge request (requires user authentication)"
-        auth: "required"
-        permissions: "write"
-        
-      # Search and exploration tools (perfect for LLMs)
-      - name: "search_gitlab"
-        description: "Search across all GitLab (projects, issues, merge requests) - ideal for LLM exploration"
-        auth: "optional"
-      - name: "search_projects"
-        description: "Search for projects by name or description"
-        auth: "optional"
-      - name: "search_issues"
-        description: "Search for issues globally or within specific projects"
-        auth: "optional"
-      - name: "search_merge_requests"
-        description: "Search for merge requests and code changes"
-        auth: "optional"
-      - name: "search_users"
-        description: "Find users and team members"
-        auth: "optional"
-      - name: "search_groups"
-        description: "Search groups and organizations"
-        auth: "optional"
-      - name: "browse_repository"
-        description: "Browse repository files and folder structure"
-        auth: "optional"
-      - name: "get_file_content"
-        description: "Get the content of specific files for code analysis"
-        auth: "optional"
+    # User-specific variables for authentication
+    customUserVars:
+      GITLAB_ACCESS_TOKEN:
+        title: "GitLab Personal Access Token"
+        description: "Your GitLab Personal Access Token with 'api' scope for full functionality or 'read_api' for read-only access"
+        type: password
+        required: false
+      GITLAB_USER_URL:
+        title: "GitLab Instance URL (Optional)"
+        description: "Your GitLab instance URL (leave empty to use server default)"
+        type: url
+        required: false
+
+---
+
+# Alternative configuration using Docker container directly
+# mcpServers:
+#   gitlab:
+#     command: docker
+#     args:
+#       - run
+#       - --rm
+#       - -i
+#       - -p=8008:8008
+#       - --name=gitlab-mcp-server
+#       - -e=GITLAB_URL=${GITLAB_URL:-https://gitlab.com}
+#       - -e=GITLAB_AUTH_MODE=${GITLAB_AUTH_MODE:-hybrid}  
+#       - -e=GITLAB_SHARED_ACCESS_TOKEN=${GITLAB_SHARED_ACCESS_TOKEN:-}
+#       - -e=PORT=8008
+#       - -e=MCP_TRANSPORT=http
+#       - gitlab-mcp-server
+#     type: streamable-http
+#     url: "http://localhost:8008/message"
+
+---
+
+# Configuration for development with local npm package
+# mcpServers:
+#   gitlab:
+#     command: npx
+#     args: 
+#       - "-y"
+#       - "gitlab-mcp-server"
+#     type: stdio
+#     env:
+#       GITLAB_URL: "${GITLAB_URL:-https://gitlab.com}"
+#       GITLAB_AUTH_MODE: "${GITLAB_AUTH_MODE:-hybrid}"
+#       GITLAB_SHARED_ACCESS_TOKEN: "${GITLAB_SHARED_ACCESS_TOKEN:-}"
+#     customUserVars:
+#       GITLAB_ACCESS_TOKEN:
+#         title: "GitLab Personal Access Token"
+#         description: "Your GitLab PAT with 'api' or 'read_api' scope"
+#         type: password

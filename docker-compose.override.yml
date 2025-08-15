@@ -1,0 +1,20 @@
+# LibreChat Integration - Add this to your LibreChat docker-compose.override.yml
+# Then restart with: docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
+#
+# Requirements:
+# 1. Copy Dockerfile.mcp-gitlab to your LibreChat root directory
+# 2. Add GitLab environment variables to your .env file
+# 3. Add this service configuration to docker-compose.override.yml
+
+services:
+  gitlab-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp-gitlab
+    env_file:
+      - .env
+    ports:
+      - "8008:8008"
+    networks:
+      - librechat
+    restart: unless-stopped

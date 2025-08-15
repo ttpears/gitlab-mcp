@@ -24,35 +24,56 @@ A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with aut
 
 ### Docker (Recommended for LibreChat)
 
-1. Build the Docker image:
+1. **Copy files to your LibreChat directory:**
 ```bash
-docker build -f Dockerfile.mcp-gitlab -t gitlab-mcp-server .
+# Copy the Dockerfile to your LibreChat root
+cp Dockerfile.mcp-gitlab /path/to/librechat/Dockerfile.mcp-gitlab
 ```
 
-2. Add to your `docker-compose.override.yml`:
+2. **Add GitLab environment variables to your LibreChat `.env` file:**
+```bash
+# GitLab MCP Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_AUTH_MODE=hybrid
+GITLAB_SHARED_ACCESS_TOKEN=your-optional-shared-token
+GITLAB_MAX_PAGE_SIZE=50
+GITLAB_TIMEOUT=30000
+PORT=8008
+MCP_TRANSPORT=http
+```
+
+3. **Add service to your LibreChat `docker-compose.override.yml`:**
 ```yaml
 services:
   gitlab-mcp:
     build:
-      context: ./gitlab-mcp
+      context: .
       dockerfile: Dockerfile.mcp-gitlab
-    environment:
-      - GITLAB_URL=https://your-gitlab.com
-      - GITLAB_ACCESS_TOKEN=your-access-token
+    env_file:
+      - .env
+    ports:
+      - "8008:8008"
     networks:
-      - librechat-network
+      - librechat
+    restart: unless-stopped
 ```
 
-3. Configure in your `librechat.yml`:
+4. **Configure in your LibreChat `librechat.yml`:**
 ```yaml
-mcp:
+mcpServers:
   gitlab:
-    name: "GitLab"
-    docker:
-      image: "gitlab-mcp-server"
-    env:
-      GITLAB_URL: "https://your-gitlab.com"
-      GITLAB_ACCESS_TOKEN: "${GITLAB_ACCESS_TOKEN}"
+    type: streamable-http
+    url: "http://localhost:8008/message"
+    customUserVars:
+      GITLAB_ACCESS_TOKEN:
+        title: "GitLab Personal Access Token"
+        type: password
+        required: false
+```
+
+5. **Restart LibreChat:**
+```bash
+docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 ```
 
 ### Smithery (NPM-style install)
@@ -326,10 +347,46 @@ await callTool('execute_custom_query', {
 
 ## LibreChat Integration
 
-1. **Docker Setup**: Use the provided `docker-compose.example.yml`
-2. **Environment**: Set up `.env` file with your GitLab credentials
-3. **Configuration**: Add GitLab MCP to your `librechat.yml`
-4. **Network**: Ensure both services share the same Docker network
+The GitLab MCP server integrates with LibreChat using the same pattern as the BookStack MCP server.
+
+### **Docker Integration (Recommended)**
+
+1. **Copy the Dockerfile** to your LibreChat root directory
+2. **Add GitLab environment variables** to your LibreChat `.env`
+3. **Add the service** to your `docker-compose.override.yml`
+4. **Configure the MCP server** in your `librechat.yml`
+5. **Restart LibreChat** with the override file
+
+### **Environment Variables**
+Add these to your LibreChat `.env` file:
+```bash
+# GitLab MCP Server Configuration
+GITLAB_URL=https://your-gitlab.com           # Your GitLab instance
+GITLAB_AUTH_MODE=hybrid                       # Authentication mode
+GITLAB_SHARED_ACCESS_TOKEN=                   # Optional shared token
+PORT=8008                                     # Server port
+MCP_TRANSPORT=http                            # Use HTTP transport
+```
+
+### **LibreChat Configuration**
+The server runs on HTTP port 8008 and integrates via `streamable-http` transport:
+```yaml
+mcpServers:
+  gitlab:
+    type: streamable-http
+    url: "http://localhost:8008/message"
+    customUserVars:
+      GITLAB_ACCESS_TOKEN:
+        title: "GitLab Personal Access Token"
+        type: password
+        required: false
+```
+
+### **User Authentication Flow**
+- **Read operations**: Use shared token (if configured) or prompt for user token
+- **Write operations**: Always prompt for user Personal Access Token
+- **Private data**: Requires user authentication for access
+- **LibreChat handles**: Automatic credential prompts and management
 
 ## GraphQL Schema Discovery
 
