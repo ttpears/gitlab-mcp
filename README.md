@@ -22,12 +22,16 @@ A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with aut
 
 ## Installation
 
+### 📁 **File Structure Note**
+- **`Dockerfile`** - Standard Dockerfile (copy as `Dockerfile.mcp-gitlab` for LibreChat integration)
+- **`smithery.yaml`** - Smithery.ai configuration with both stdio and Docker integration options
+
 ### Docker (Recommended for LibreChat)
 
-1. **Copy files to your LibreChat directory:**
+1. **Copy Dockerfile to your LibreChat directory:**
 ```bash
-# Copy the Dockerfile to your LibreChat root
-cp Dockerfile.mcp-gitlab /path/to/librechat/Dockerfile.mcp-gitlab
+# Copy and rename the Dockerfile for LibreChat integration
+cp Dockerfile /path/to/librechat/Dockerfile.mcp-gitlab
 ```
 
 2. **Add GitLab environment variables to your LibreChat `.env` file:**

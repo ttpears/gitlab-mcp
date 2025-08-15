@@ -1,0 +1,169 @@
+# Smithery.ai Configuration for GitLab MCP Server
+name: gitlab-mcp-server
+description: GitLab MCP Server with comprehensive search capabilities and GraphQL discovery - perfect for LLM exploration of GitLab repositories
+version: 1.0.0
+author: ttpears
+homepage: https://github.com/ttpears/gitlab-mcp
+repository: https://github.com/ttpears/gitlab-mcp
+
+# Server configuration
+server:
+  # Primary command for running the server
+  command: node
+  args: ["dist/index.js"]
+  
+  # Environment variables
+  env:
+    GITLAB_URL:
+      description: "GitLab instance URL (default: https://gitlab.com)"
+      default: "https://gitlab.com"
+      required: false
+    GITLAB_AUTH_MODE:
+      description: "Authentication mode: shared, per-user, or hybrid (default: hybrid)"
+      default: "hybrid"
+      required: false
+    GITLAB_SHARED_ACCESS_TOKEN:
+      description: "Optional shared GitLab access token for read-only operations (read_api scope)"
+      required: false
+    GITLAB_MAX_PAGE_SIZE:
+      description: "Maximum page size for paginated queries (1-100)"
+      default: "50"
+      required: false
+    GITLAB_TIMEOUT:
+      description: "Request timeout in milliseconds"
+      default: "30000"
+      required: false
+
+# LibreChat Integration
+librechat:
+  # For standalone Smithery installation (stdio transport)
+  config:
+    command: npx
+    args: ["gitlab-mcp-server"]
+    type: stdio
+    env:
+      GITLAB_URL: "${GITLAB_URL:-https://gitlab.com}"
+      GITLAB_AUTH_MODE: "${GITLAB_AUTH_MODE:-hybrid}"
+      GITLAB_SHARED_ACCESS_TOKEN: "${GITLAB_SHARED_ACCESS_TOKEN:-}"
+    customUserVars:
+      GITLAB_ACCESS_TOKEN:
+        title: "GitLab Personal Access Token"
+        description: "Your GitLab PAT with 'api' scope for full functionality or 'read_api' for read-only access"
+        type: password
+        required: false
+        
+  # Alternative Docker integration (HTTP transport)
+  docker:
+    instructions: |
+      For Docker integration with LibreChat:
+      
+      1. Copy Dockerfile to your LibreChat root directory as Dockerfile.mcp-gitlab:
+         cp Dockerfile /path/to/librechat/Dockerfile.mcp-gitlab
+      
+      2. Add to your LibreChat docker-compose.override.yml:
+         services:
+           gitlab-mcp:
+             build:
+               context: .
+               dockerfile: Dockerfile.mcp-gitlab
+             env_file:
+               - .env
+             ports:
+               - "8008:8008"
+             networks:
+               - librechat
+             restart: unless-stopped
+      
+      3. Configure in librechat.yml:
+         mcpServers:
+           gitlab:
+             type: streamable-http
+             url: "http://localhost:8008/message"
+             customUserVars:
+               GITLAB_ACCESS_TOKEN:
+                 title: "GitLab Personal Access Token"
+                 type: password
+                 required: false
+      
+      4. Add environment variables to LibreChat .env:
+         PORT=8008
+         MCP_TRANSPORT=http
+         GITLAB_URL=https://gitlab.com
+         GITLAB_AUTH_MODE=hybrid
+
+# Available tools
+tools:
+  # Search & Discovery (Perfect for LLMs)
+  - name: search_gitlab
+    description: Global search across GitLab (projects, issues, merge requests) - ideal for LLM exploration
+    category: search
+  - name: search_projects
+    description: Search for GitLab projects by name or description
+    category: search
+  - name: search_issues
+    description: Search for issues globally or within specific projects with state filtering
+    category: search
+  - name: search_merge_requests
+    description: Search for merge requests and code changes with advanced filters
+    category: search
+  - name: search_users
+    description: Search for GitLab users by username or name
+    category: search
+  - name: search_groups
+    description: Search for GitLab groups and organizations
+    category: search
+  - name: browse_repository
+    description: Browse repository files and folder structure for code exploration
+    category: code
+  - name: get_file_content
+    description: Get the content of specific files from GitLab repositories for analysis
+    category: code
+    
+  # Core Operations
+  - name: get_current_user
+    description: Get information about the current authenticated GitLab user
+    category: user
+  - name: get_projects
+    description: List projects accessible to the current user with pagination support
+    category: project
+  - name: get_project
+    description: Get detailed information about a specific GitLab project by full path
+    category: project
+  - name: get_issues
+    description: Get issues from a specific GitLab project with pagination support
+    category: issues
+  - name: get_merge_requests
+    description: Get merge requests from a specific GitLab project with pagination support
+    category: merge_requests
+    
+  # Write Operations (require user authentication)
+  - name: create_issue
+    description: Create a new issue in a GitLab project (requires user authentication)
+    category: issues
+    requires_auth: true
+  - name: create_merge_request
+    description: Create a new merge request in a GitLab project (requires user authentication)
+    category: merge_requests
+    requires_auth: true
+    
+  # Advanced
+  - name: execute_custom_query
+    description: Execute custom GraphQL queries against the GitLab API
+    category: advanced
+  - name: get_available_queries
+    description: Get list of available GraphQL queries and mutations from schema introspection
+    category: advanced
+
+# Keywords for discoverability
+keywords:
+  - gitlab
+  - graphql
+  - search
+  - git
+  - repository
+  - issues
+  - merge-requests
+  - code-exploration
+  - llm
+  - mcp
+  - model-context-protocol

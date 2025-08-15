@@ -2,7 +2,7 @@
 # Then restart with: docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 #
 # Requirements:
-# 1. Copy Dockerfile.mcp-gitlab to your LibreChat root directory
+# 1. Copy Dockerfile to your LibreChat root directory as Dockerfile.mcp-gitlab
 # 2. Add GitLab environment variables to your .env file
 # 3. Add this service configuration to docker-compose.override.yml
 

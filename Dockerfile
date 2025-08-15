@@ -1,3 +1,6 @@
+# GitLab MCP Server - Standard Dockerfile for Smithery.ai
+# For LibreChat integration, copy this file to your LibreChat root as Dockerfile.mcp-gitlab
+
 FROM node:20-alpine AS builder
 
 WORKDIR /app
