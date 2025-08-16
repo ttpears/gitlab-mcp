@@ -109,7 +109,7 @@ class GitLabMCPServer {
       }
       
       // Determine transport based on environment
-      const port = process.env.PORT ? parseInt(process.env.PORT) : null;
+      const port = process.env.GITLAB_MCP_PORT ? parseInt(process.env.GITLAB_MCP_PORT) : null;
       const useHttp = process.env.MCP_TRANSPORT === 'http' || port;
       
       if (useHttp && port) {

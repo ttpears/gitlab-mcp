@@ -87,7 +87,7 @@ librechat:
                  required: false
       
       4. Add environment variables to LibreChat .env:
-         PORT=8008
+         GITLAB_MCP_PORT=8008
          MCP_TRANSPORT=http
          GITLAB_URL=https://gitlab.com
          GITLAB_AUTH_MODE=hybrid
