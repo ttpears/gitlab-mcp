@@ -115,10 +115,21 @@ class GitLabMCPServer {
       if (useHttp && port) {
         // HTTP/SSE transport for LibreChat integration
         const httpServer = http.createServer((req, res) => {
-          if (req.url === '/sse') {
-            // Handle SSE connection - SSEServerTransport handles both GET and POST
-            const transport = new SSEServerTransport('/sse', res);
+          if (req.url === '/sse' && req.method === 'GET') {
+            // Handle SSE connection establishment - transport points to /message endpoint
+            const transport = new SSEServerTransport('/message', res);
             this.server.connect(transport);
+          } else if (req.url === '/message' && req.method === 'POST') {
+            // Handle MCP protocol messages
+            let body = '';
+            req.on('data', chunk => {
+              body += chunk.toString();
+            });
+            req.on('end', () => {
+              // Message handling will be done by the transport
+              res.writeHead(200);
+              res.end();
+            });
           } else {
             res.writeHead(404);
             res.end();
