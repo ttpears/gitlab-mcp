@@ -79,7 +79,7 @@ librechat:
          mcpServers:
            gitlab:
              type: streamable-http
-             url: "http://localhost:8008/message"
+             url: "http://localhost:8008/sse"
              customUserVars:
                GITLAB_ACCESS_TOKEN:
                  title: "GitLab Personal Access Token"
