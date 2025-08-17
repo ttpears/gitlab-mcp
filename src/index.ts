@@ -6,6 +6,7 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import * as http from 'http';
 import { URL } from 'url';
 import express from 'express';
+import { zodToJsonSchema } from 'zod-to-json-schema';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -44,7 +45,7 @@ class GitLabMCPServer {
         tools: tools.map(tool => ({
           name: tool.name,
           description: tool.description,
-          inputSchema: tool.inputSchema,
+          inputSchema: zodToJsonSchema(tool.inputSchema, { target: 'jsonSchema7' }),
         })),
       };
     });
