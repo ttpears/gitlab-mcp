@@ -3,7 +3,9 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as http from 'http';
+import { randomUUID } from 'node:crypto';
 import { URL } from 'url';
 import express from 'express';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -21,6 +23,8 @@ class GitLabMCPServer {
   private server: Server;
   private gitlabClient!: GitLabGraphQLClient;
   private transports: Map<string, SSEServerTransport> = new Map();
+  private httpTransports: Map<string, StreamableHTTPServerTransport> = new Map();
+  private defaultUserConfigFromHeaders?: { accessToken: string; gitlabUrl?: string };
 
   constructor() {
     this.server = new Server(
@@ -60,8 +64,8 @@ class GitLabMCPServer {
 
       try {
         const validatedInput = tool.inputSchema.parse(args || {});
-        // Extract user credentials if provided
-        const userConfig = validatedInput.userCredentials;
+        // Extract user credentials if provided, else use defaults from headers (streamable-http)
+        const userConfig = validatedInput.userCredentials || this.defaultUserConfigFromHeaders;
         delete validatedInput.userCredentials; // Remove from input to avoid passing to handler
         
         const result = await tool.handler(validatedInput, this.gitlabClient, userConfig);
@@ -124,7 +128,8 @@ class GitLabMCPServer {
         app.use((req, res, next) => {
           res.header('Access-Control-Allow-Origin', '*');
           res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-session-id');
+          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-session-id, mcp-session-id');
+          res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id');
           if (req.method === 'OPTIONS') {
             res.sendStatus(200);
             return;
@@ -190,6 +195,67 @@ class GitLabMCPServer {
           }
         });
 
+        // Streamable HTTP endpoint at root for modern MCP clients
+        app.all('/', async (req, res) => {
+          try {
+            // If session header provided, reuse existing transport
+            const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
+            if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
+              const transport = this.httpTransports.get(sessionIdHeader)!;
+              await transport.handleRequest(req as any, res as any, (req as any).body);
+              return;
+            }
+
+            // Initialize a new session on first POST without session header
+            if (req.method === 'POST') {
+              const transport = new StreamableHTTPServerTransport({
+                sessionIdGenerator: () => randomUUID(),
+                onsessioninitialized: (sessionId: string) => {
+                  this.httpTransports.set(sessionId, transport);
+                },
+              });
+
+              // Capture Authorization header and optional X-GitLab-Url to use as default user credentials
+              const authHeader = (req.headers['authorization'] as string) || '';
+              const gitlabUrlHeader = (req.headers['x-gitlab-url'] as string) || undefined;
+              if (authHeader) {
+                const token = authHeader.startsWith('Bearer ')
+                  ? authHeader.slice('Bearer '.length).trim()
+                  : authHeader.trim();
+                if (token) {
+                  this.defaultUserConfigFromHeaders = { accessToken: token, gitlabUrl: gitlabUrlHeader };
+                }
+              }
+
+              transport.onclose = () => {
+                if (transport.sessionId) {
+                  this.httpTransports.delete(transport.sessionId);
+                }
+              };
+
+              await this.server.connect(transport);
+              await transport.handleRequest(req as any, res as any, (req as any).body);
+              return;
+            }
+
+            // If not POST and no valid session, it's a bad request
+            res.status(400).json({
+              jsonrpc: '2.0',
+              error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+              id: null,
+            });
+          } catch (error) {
+            console.error('Error in Streamable HTTP endpoint:', error);
+            if (!res.headersSent) {
+              res.status(500).json({
+                jsonrpc: '2.0',
+                error: { code: -32603, message: 'Internal server error' },
+                id: null,
+              });
+            }
+          }
+        });
+
         app.get('/health', (req, res) => {
           res.json({
             status: 'healthy',
@@ -202,6 +268,7 @@ class GitLabMCPServer {
           console.error(`GitLab MCP Server running on HTTP port ${port}`);
           console.error(`SSE endpoint: http://localhost:${port}/sse`);
           console.error(`Message endpoint: http://localhost:${port}/message`);
+          console.error(`Streamable HTTP endpoint (root): http://localhost:${port}/`);
           console.error(`Health check: http://localhost:${port}/health`);
         });
       } else {
