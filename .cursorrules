@@ -19,6 +19,8 @@
   - `resolve_path`: Distinguishes `group` vs `project` and lists group projects.
   - `get_group_projects`: Lists projects within a group, supports search and pagination.
   - `get_type_fields`: Lists fields for a given GraphQL type using introspection.
+  - `update_issue`: Schema-aware updates for issues; falls back to granular mutations when needed.
+  - `update_merge_request`: Schema-aware MR updates; supports assignees, reviewers, labels, title/description.
 
 - Error handling
   - Read tools fall back to shared token; write tools throw if no user token is provided.
@@ -26,3 +28,4 @@
 
 - Maintenance
   - Keep this file updated when adding tools, transports, or auth changes.
+  - Reviewers apply to merge requests, not issues (per GitLab GraphQL docs).

@@ -521,6 +521,111 @@ export class GitLabGraphQLClient {
     return results;
   }
 
+  async getMergeRequestId(projectPath: string, iid: string, userConfig?: UserConfig): Promise<string> {
+    const query = gql`
+      query mrId($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) { id }
+        }
+      }
+    `;
+    const result = await this.query(query, { projectPath, iid }, userConfig);
+    const id = result?.project?.mergeRequest?.id;
+    if (!id) throw new Error('Merge request not found');
+    return id;
+  }
+
+  async updateMergeRequestComposite(
+    projectPath: string,
+    iid: string,
+    options: {
+      title?: string;
+      description?: string;
+      assigneeUsernames?: string[];
+      reviewerUsernames?: string[];
+      labelNames?: string[];
+    },
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mrId = await this.getMergeRequestId(projectPath, iid, userConfig);
+    const assigneeIdsMap = await this.getUserIdsByUsernames(options.assigneeUsernames || [], userConfig);
+    const assigneeIds = Object.values(assigneeIdsMap);
+    const reviewerIdsMap = await this.getUserIdsByUsernames(options.reviewerUsernames || [], userConfig);
+    const reviewerIds = Object.values(reviewerIdsMap);
+    const labelIdsMap = await this.getLabelIds(projectPath, options.labelNames || [], userConfig);
+    const labelIds = Object.values(labelIdsMap);
+
+    const results: any = { iid, projectPath };
+
+    if (fields['updateMergeRequest']) {
+      const mutation = gql`
+        mutation UpdateMergeRequest($input: UpdateMergeRequestInput!) {
+          updateMergeRequest(input: $input) {
+            mergeRequest { id iid title description webUrl updatedAt labels { nodes { title } } assignees { nodes { username } } }
+            errors
+          }
+        }
+      `;
+      const input: any = { projectPath, iid };
+      if (options.title) input.title = options.title;
+      if (options.description) input.description = options.description;
+      if (labelIds.length > 0) input.labelIds = labelIds;
+      if (assigneeIds.length > 0) input.assigneeIds = assigneeIds;
+      const res = await this.query(mutation, { input }, userConfig, true);
+      results.updateMergeRequest = res.updateMergeRequest;
+    } else {
+      if (assigneeIds.length > 0 && fields['mergeRequestSetAssignees']) {
+        const mutation = gql`
+          mutation SetMRAssignees($input: MergeRequestSetAssigneesInput!) {
+            mergeRequestSetAssignees(input: $input) { mergeRequest { id iid assignees { nodes { username } } } errors }
+          }
+        `;
+        const res = await this.query(mutation, { input: { mergeRequestId: mrId, assigneeIds } }, userConfig, true);
+        results.mergeRequestSetAssignees = res.mergeRequestSetAssignees;
+      }
+      if (labelIds.length > 0 && fields['mergeRequestSetLabels']) {
+        const mutation = gql`
+          mutation SetMRLabels($input: MergeRequestSetLabelsInput!) {
+            mergeRequestSetLabels(input: $input) { mergeRequest { id iid labels { nodes { title } } } errors }
+          }
+        `;
+        const res = await this.query(mutation, { input: { mergeRequestId: mrId, labelIds } }, userConfig, true);
+        results.mergeRequestSetLabels = res.mergeRequestSetLabels;
+      }
+      if (reviewerIds.length > 0 && fields['mergeRequestSetReviewers']) {
+        const mutation = gql`
+          mutation SetMRReviewers($input: MergeRequestSetReviewersInput!) {
+            mergeRequestSetReviewers(input: $input) { mergeRequest { id iid reviewers { nodes { username } } } errors }
+          }
+        `;
+        const res = await this.query(mutation, { input: { mergeRequestId: mrId, reviewerIds } }, userConfig, true);
+        results.mergeRequestSetReviewers = res.mergeRequestSetReviewers;
+      }
+      if (options.title || options.description) {
+        // Attempt legacy/update fallback if available
+        const legacyName = fields['mergeRequestUpdate'] ? 'mergeRequestUpdate' : undefined;
+        if (legacyName) {
+          const mutation = gql`
+            mutation LegacyMRUpdate($input: MergeRequestUpdateInput!) {
+              mergeRequestUpdate(input: $input) { mergeRequest { id iid title description } errors }
+            }
+          `;
+          const input: any = { mergeRequestId: mrId };
+          if (options.title) input.title = options.title;
+          if (options.description) input.description = options.description;
+          const res = await this.query(mutation, { input }, userConfig, true);
+          results.mergeRequestUpdate = res.mergeRequestUpdate;
+        }
+      }
+    }
+
+    return results;
+  }
+
   getTypeFields(typeName: string): string[] {
     if (!this.schema) return [];
     const type = this.schema.getType(typeName);

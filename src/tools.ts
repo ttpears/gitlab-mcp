@@ -271,6 +271,41 @@ const updateIssueTool: Tool = {
   },
 };
 
+const updateMergeRequestTool: Tool = {
+  name: 'update_merge_request',
+  description: 'Update a merge request (title, description, assignees, reviewers, labels) with schema-aware mutations',
+  requiresAuth: true,
+  requiresWrite: true,
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge Request IID (internal ID shown in the URL)'),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    assigneeUsernames: z.array(z.string()).optional(),
+    reviewerUsernames: z.array(z.string()).optional(),
+    labelNames: z.array(z.string()).optional(),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required to update merge requests.');
+    }
+    const result = await client.updateMergeRequestComposite(
+      input.projectPath,
+      input.iid,
+      {
+        title: input.title,
+        description: input.description,
+        assigneeUsernames: input.assigneeUsernames,
+        reviewerUsernames: input.reviewerUsernames,
+        labelNames: input.labelNames,
+      },
+      credentials
+    );
+    return result;
+  },
+};
+
 // Discovery/introspection tools
 const resolvePathTool: Tool = {
   name: 'resolve_path',
@@ -546,6 +581,7 @@ export const tools: Tool[] = [
   ...userAuthTools,
   ...writeTools,
   updateIssueTool,
+  updateMergeRequestTool,
   resolvePathTool,
   getGroupProjectsTool,
   getTypeFieldsTool,
