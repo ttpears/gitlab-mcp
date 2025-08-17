@@ -39,7 +39,7 @@ const getCurrentUserTool: Tool = {
   description: 'Get information about the current authenticated GitLab user',
   requiresAuth: true,
   requiresWrite: false,
-  inputSchema: withUserAuth(z.object({})),
+  inputSchema: withUserAuth(z.object({}).strict()),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.getCurrentUser(credentials);
@@ -193,7 +193,7 @@ const getAvailableQueriesTools: Tool = {
   description: 'Get list of available GraphQL queries and mutations from the GitLab schema',
   requiresAuth: false,
   requiresWrite: false,
-  inputSchema: withUserAuth(z.object({})),
+  inputSchema: withUserAuth(z.object({}).strict()),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     await client.introspectSchema(credentials);
