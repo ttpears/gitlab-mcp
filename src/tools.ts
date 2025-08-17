@@ -11,11 +11,17 @@ export interface Tool {
   handler: (input: any, client: GitLabGraphQLClient, userConfig?: UserConfig) => Promise<any>;
 }
 
-// Schema for user credentials
+// Schema for user credentials (empty object coerces to undefined for header-based auth)
 const UserCredentialsSchema = z.object({
   gitlabUrl: z.string().url().optional(),
-  accessToken: z.string().min(1),
-}).nullable().optional();
+  accessToken: z.string().min(1).optional(),
+})
+  .nullable()
+  .optional()
+  .transform((val) => {
+    if (!val || !val.accessToken) return undefined;
+    return val as { gitlabUrl?: string; accessToken: string };
+  });
 
 // Helper to add user credentials to input schemas
 const withUserAuth = (baseSchema: z.ZodObject<any>, required = false) => {
