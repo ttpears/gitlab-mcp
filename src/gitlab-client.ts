@@ -396,6 +396,131 @@ export class GitLabGraphQLClient {
     return Object.keys(mutationType.getFields());
   }
 
+  // Helpers for updates
+  async getIssueId(projectPath: string, iid: string, userConfig?: UserConfig): Promise<string> {
+    const query = gql`
+      query issueId($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          issue(iid: $iid) { id }
+        }
+      }
+    `;
+    const result = await this.query(query, { projectPath, iid }, userConfig);
+    const id = result?.project?.issue?.id;
+    if (!id) throw new Error('Issue not found');
+    return id;
+  }
+
+  async getUserIdsByUsernames(usernames: string[], userConfig?: UserConfig): Promise<Record<string, string>> {
+    const ids: Record<string, string> = {};
+    if (!usernames || usernames.length === 0) return ids;
+    const query = gql`
+      query users($search: String!, $first: Int!) {
+        users(search: $search, first: $first) { nodes { id username } }
+      }
+    `;
+    for (const name of usernames) {
+      const res = await this.query(query, { search: name, first: 20 }, userConfig);
+      const node = res?.users?.nodes?.find((u: any) => u.username === name);
+      if (node?.id) ids[name] = node.id;
+    }
+    return ids;
+  }
+
+  async getLabelIds(projectPath: string, labelNames: string[], userConfig?: UserConfig): Promise<Record<string, string>> {
+    const ids: Record<string, string> = {};
+    if (!labelNames || labelNames.length === 0) return ids;
+    const query = gql`
+      query projLabels($projectPath: ID!, $search: String!, $first: Int!) {
+        project(fullPath: $projectPath) {
+          labels(search: $search, first: $first) { nodes { id title } }
+        }
+      }
+    `;
+    for (const title of labelNames) {
+      const res = await this.query(query, { projectPath, search: title, first: 50 }, userConfig);
+      const node = res?.project?.labels?.nodes?.find((l: any) => l.title === title);
+      if (node?.id) ids[title] = node.id;
+    }
+    return ids;
+  }
+
+  async updateIssueComposite(
+    projectPath: string,
+    iid: string,
+    options: {
+      title?: string;
+      description?: string;
+      assigneeUsernames?: string[];
+      labelNames?: string[];
+      dueDate?: string;
+    },
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const issueId = await this.getIssueId(projectPath, iid, userConfig);
+    const assigneeIdsMap = await this.getUserIdsByUsernames(options.assigneeUsernames || [], userConfig);
+    const assigneeIds = Object.values(assigneeIdsMap);
+    const labelIdsMap = await this.getLabelIds(projectPath, options.labelNames || [], userConfig);
+    const labelIds = Object.values(labelIdsMap);
+
+    const results: any = { iid, projectPath };
+
+    // Title/description/dueDate via updateIssue if available
+    if (fields['updateIssue']) {
+      const mutation = gql`
+        mutation UpdateIssue($input: UpdateIssueInput!) {
+          updateIssue(input: $input) {
+            issue { id iid title description dueDate webUrl updatedAt }
+            errors
+          }
+        }
+      `;
+      const input: any = { projectPath, iid };
+      if (options.title) input.title = options.title;
+      if (options.description) input.description = options.description;
+      if (options.dueDate) input.dueDate = options.dueDate;
+      if (labelIds.length > 0) input.labelIds = labelIds;
+      if (assigneeIds.length > 0) input.assigneeIds = assigneeIds;
+      const res = await this.query(mutation, { input }, userConfig, true);
+      results.updateIssue = res.updateIssue;
+    } else {
+      // Fallback to granular mutations if present
+      if (assigneeIds.length > 0 && fields['issueSetAssignees']) {
+        const mutation = gql`
+          mutation SetAssignees($input: IssueSetAssigneesInput!) {
+            issueSetAssignees(input: $input) { issue { id iid assignees { nodes { username } } } errors }
+          }
+        `;
+        const res = await this.query(mutation, { input: { issueId, assigneeIds } }, userConfig, true);
+        results.issueSetAssignees = res.issueSetAssignees;
+      }
+      if (labelIds.length > 0 && fields['issueSetLabels']) {
+        const mutation = gql`
+          mutation SetLabels($input: IssueSetLabelsInput!) {
+            issueSetLabels(input: $input) { issue { id iid labels { nodes { title } } } errors }
+          }
+        `;
+        const res = await this.query(mutation, { input: { issueId, labelIds } }, userConfig, true);
+        results.issueSetLabels = res.issueSetLabels;
+      }
+      if (options.dueDate && fields['issueSetDueDate']) {
+        const mutation = gql`
+          mutation SetDueDate($input: IssueSetDueDateInput!) {
+            issueSetDueDate(input: $input) { issue { id iid dueDate } errors }
+          }
+        `;
+        const res = await this.query(mutation, { input: { issueId, dueDate: options.dueDate } }, userConfig, true);
+        results.issueSetDueDate = res.issueSetDueDate;
+      }
+    }
+
+    return results;
+  }
+
   getTypeFields(typeName: string): string[] {
     if (!this.schema) return [];
     const type = this.schema.getType(typeName);

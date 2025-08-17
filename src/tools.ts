@@ -236,6 +236,41 @@ export const writeTools: Tool[] = [
   createMergeRequestTool,
 ];
 
+const updateIssueTool: Tool = {
+  name: 'update_issue',
+  description: 'Update an issue (title, description, assignees, labels, due date) with schema-aware mutations',
+  requiresAuth: true,
+  requiresWrite: true,
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Issue IID (internal ID shown in the URL)'),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    assigneeUsernames: z.array(z.string()).optional(),
+    labelNames: z.array(z.string()).optional(),
+    dueDate: z.string().optional().describe('YYYY-MM-DD'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required to update issues.');
+    }
+    const result = await client.updateIssueComposite(
+      input.projectPath,
+      input.iid,
+      {
+        title: input.title,
+        description: input.description,
+        assigneeUsernames: input.assigneeUsernames,
+        labelNames: input.labelNames,
+        dueDate: input.dueDate,
+      },
+      credentials
+    );
+    return result;
+  },
+};
+
 // Discovery/introspection tools
 const resolvePathTool: Tool = {
   name: 'resolve_path',
@@ -510,6 +545,7 @@ export const tools: Tool[] = [
   ...readOnlyTools,
   ...userAuthTools,
   ...writeTools,
+  updateIssueTool,
   resolvePathTool,
   getGroupProjectsTool,
   getTypeFieldsTool,
