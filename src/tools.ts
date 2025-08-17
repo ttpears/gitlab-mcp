@@ -128,7 +128,7 @@ const createIssueTool: Tool = {
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     title: z.string().min(1).describe('Title of the issue'),
     description: z.string().optional().describe('Description of the issue'),
-  }), true), // true = required auth
+  })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     if (!credentials) {
@@ -153,7 +153,7 @@ const createMergeRequestTool: Tool = {
     sourceBranch: z.string().min(1).describe('Source branch name'),
     targetBranch: z.string().min(1).describe('Target branch name'),
     description: z.string().optional().describe('Description of the merge request'),
-  }), true), // true = required auth
+  })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     if (!credentials) {
@@ -346,6 +346,9 @@ const searchIssuesTool: Tool = {
     
     // Return the issues from either project-specific or global search
     if (input.projectPath) {
+      if (!result || !result.project || !result.project.issues) {
+        throw new Error('Project not found or issues are not accessible for the provided path');
+      }
       return result.project.issues;
     } else {
       return result.issues;
@@ -381,6 +384,9 @@ const searchMergeRequestsTool: Tool = {
     
     // Return the merge requests from either project-specific or global search
     if (input.projectPath) {
+      if (!result || !result.project || !result.project.mergeRequests) {
+        throw new Error('Project not found or merge requests are not accessible for the provided path');
+      }
       return result.project.mergeRequests;
     } else {
       return result.mergeRequests;
