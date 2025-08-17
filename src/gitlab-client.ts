@@ -155,7 +155,6 @@ export class GitLabGraphQLClient {
               visibility
               createdAt
               updatedAt
-              defaultBranch
               issuesEnabled
               mergeRequestsEnabled
             }
@@ -449,7 +448,6 @@ export class GitLabGraphQLClient {
             createdAt
             updatedAt
             lastActivityAt
-            defaultBranch
             issuesEnabled
             mergeRequestsEnabled
             starCount
