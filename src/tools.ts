@@ -141,10 +141,11 @@ const createIssueTool: Tool = {
       throw new Error('User authentication is required for creating issues. Please provide your GitLab credentials.');
     }
     const result = await client.createIssue(input.projectPath, input.title, input.description, credentials);
-    if (result.issueCreate.errors && result.issueCreate.errors.length > 0) {
-      throw new Error(`Failed to create issue: ${result.issueCreate.errors.join(', ')}`);
+    const payload = result.createIssue;
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to create issue: ${payload.errors.join(', ')}`);
     }
-    return result.issueCreate.issue;
+    return payload.issue;
   },
 };
 
@@ -173,10 +174,11 @@ const createMergeRequestTool: Tool = {
       input.description,
       credentials
     );
-    if (result.mergeRequestCreate.errors && result.mergeRequestCreate.errors.length > 0) {
-      throw new Error(`Failed to create merge request: ${result.mergeRequestCreate.errors.join(', ')}`);
+    const payload = result.createMergeRequest;
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to create merge request: ${payload.errors.join(', ')}`);
     }
-    return result.mergeRequestCreate.mergeRequest;
+    return payload.mergeRequest;
   },
 };
 

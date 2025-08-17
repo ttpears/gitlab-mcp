@@ -272,9 +272,25 @@ export class GitLabGraphQLClient {
   }
 
   async createIssue(projectPath: string, title: string, description?: string, userConfig?: UserConfig): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const fieldName = fields['createIssue'] ? 'createIssue' : (fields['issueCreate'] ? 'issueCreate' : null);
+    if (!fieldName) {
+      throw new Error('Neither createIssue nor issueCreate mutation is available on this GitLab instance');
+    }
+
+    const hasCreateInput = !!this.schema.getType('CreateIssueInput');
+    const hasLegacyInput = !!this.schema.getType('IssueCreateInput');
+    const inputType = hasCreateInput ? 'CreateIssueInput' : (hasLegacyInput ? 'IssueCreateInput' : null);
+    if (!inputType) {
+      throw new Error('Neither CreateIssueInput nor IssueCreateInput input type is available on this GitLab instance');
+    }
+
     const mutation = gql`
-      mutation createIssue($input: IssueCreateInput!) {
-        issueCreate(input: $input) {
+      mutation createIssue($input: ${inputType}!) {
+        ${fieldName}(input: $input) {
           issue {
             id
             iid
@@ -288,14 +304,17 @@ export class GitLabGraphQLClient {
         }
       }
     `;
-    
+
     const input = {
       projectPath,
       title,
       description,
     };
-    
-    return this.query(mutation, { input }, userConfig, true);
+
+    const result = await this.query(mutation, { input }, userConfig, true);
+    // Normalize payload to { createIssue: ... }
+    const payload = (result as any)[fieldName];
+    return { createIssue: payload };
   }
 
   async createMergeRequest(
@@ -306,9 +325,25 @@ export class GitLabGraphQLClient {
     description?: string,
     userConfig?: UserConfig
   ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const fieldName = fields['createMergeRequest'] ? 'createMergeRequest' : (fields['mergeRequestCreate'] ? 'mergeRequestCreate' : null);
+    if (!fieldName) {
+      throw new Error('Neither createMergeRequest nor mergeRequestCreate mutation is available on this GitLab instance');
+    }
+
+    const hasCreateInput = !!this.schema.getType('CreateMergeRequestInput');
+    const hasLegacyInput = !!this.schema.getType('MergeRequestCreateInput');
+    const inputType = hasCreateInput ? 'CreateMergeRequestInput' : (hasLegacyInput ? 'MergeRequestCreateInput' : null);
+    if (!inputType) {
+      throw new Error('Neither CreateMergeRequestInput nor MergeRequestCreateInput input type is available on this GitLab instance');
+    }
+
     const mutation = gql`
-      mutation createMergeRequest($input: MergeRequestCreateInput!) {
-        mergeRequestCreate(input: $input) {
+      mutation createMergeRequest($input: ${inputType}!) {
+        ${fieldName}(input: $input) {
           mergeRequest {
             id
             iid
@@ -333,7 +368,10 @@ export class GitLabGraphQLClient {
       description,
     };
     
-    return this.query(mutation, { input }, userConfig, true);
+    const result = await this.query(mutation, { input }, userConfig, true);
+    // Normalize payload to { createMergeRequest: ... }
+    const payload = (result as any)[fieldName];
+    return { createMergeRequest: payload };
   }
 
   getSchema() {
