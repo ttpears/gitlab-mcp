@@ -469,7 +469,7 @@ export class GitLabGraphQLClient {
   ): Promise<any> {
     const query = gql`
       query searchIssues($search: String!, $projectPath: ID, $state: IssueState, $first: Int!, $after: String) {
-        project(fullPath: $projectPath) @include(if: ${!!projectPath}) {
+        project(fullPath: $projectPath) {
           issues(search: $search, state: $state, first: $first, after: $after) {
             pageInfo {
               hasNextPage
@@ -508,7 +508,6 @@ export class GitLabGraphQLClient {
             }
           }
         }
-        issues(search: $search, state: $state, first: $first, after: $after) @skip(if: ${!!projectPath}) {
           pageInfo {
             hasNextPage
             hasPreviousPage
@@ -571,7 +570,7 @@ export class GitLabGraphQLClient {
   ): Promise<any> {
     const query = gql`
       query searchMergeRequests($search: String!, $projectPath: ID, $state: MergeRequestState, $first: Int!, $after: String) {
-        project(fullPath: $projectPath) @include(if: ${!!projectPath}) {
+        project(fullPath: $projectPath) {
           mergeRequests(search: $search, state: $state, first: $first, after: $after) {
             pageInfo {
               hasNextPage
@@ -618,7 +617,6 @@ export class GitLabGraphQLClient {
             }
           }
         }
-        mergeRequests(search: $search, state: $state, first: $first, after: $after) @skip(if: ${!!projectPath}) {
           pageInfo {
             hasNextPage
             hasPreviousPage

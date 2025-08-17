@@ -74,7 +74,7 @@ const getProjectsTool: Tool = {
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.getProjects(input.first, input.after, credentials);
-    return result.currentUser.projects;
+    return result.projects;
   },
 };
 
