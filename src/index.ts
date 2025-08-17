@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import * as http from 'http';
 import { URL } from 'url';
+import express from 'express';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -18,6 +19,7 @@ import { tools } from './tools.js';
 class GitLabMCPServer {
   private server: Server;
   private gitlabClient!: GitLabGraphQLClient;
+  private transports: Map<string, SSEServerTransport> = new Map();
 
   constructor() {
     this.server = new Server(
@@ -115,33 +117,91 @@ class GitLabMCPServer {
       
       if (useHttp && port) {
         // HTTP/SSE transport for LibreChat integration
-        const httpServer = http.createServer((req, res) => {
-          const url = new URL(req.url || '', `http://localhost:${port}`);
-          const pathname = url.pathname;
-          
-          if (pathname === '/sse' && req.method === 'GET') {
-            // Handle SSE connection establishment - transport points to /message endpoint
+        const app = express();
+        
+        app.use(express.json());
+        app.use((req, res, next) => {
+          res.header('Access-Control-Allow-Origin', '*');
+          res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-session-id');
+          if (req.method === 'OPTIONS') {
+            res.sendStatus(200);
+            return;
+          }
+          next();
+        });
+
+        app.get('/sse', async (req, res) => {
+          try {
+            console.error('New SSE connection request');
+            
+            const sessionId = req.query.sessionId as string;
+            
+            if (sessionId && this.transports.has(sessionId)) {
+              console.error(`Session ${sessionId} already exists, closing connection`);
+              res.status(409).send('Session already exists');
+              return;
+            }
+
             const transport = new SSEServerTransport('/message', res);
-            this.server.connect(transport);
-          } else if (pathname === '/message' && req.method === 'POST') {
-            // Handle MCP protocol messages
-            let body = '';
-            req.on('data', chunk => {
-              body += chunk.toString();
-            });
-            req.on('end', () => {
-              // Message handling will be done by the transport
-              res.writeHead(200);
-              res.end();
-            });
-          } else {
-            res.writeHead(404);
-            res.end();
+            this.transports.set(transport.sessionId, transport);
+
+            console.error(`Created new session: ${transport.sessionId}`);
+
+            transport.onclose = () => {
+              console.error(`Session ${transport.sessionId} closed`);
+              this.transports.delete(transport.sessionId);
+            };
+
+            await this.server.connect(transport);
+            console.error(`Server connected for session: ${transport.sessionId}`);
+
+          } catch (error) {
+            console.error('Error in SSE endpoint:', error);
+            if (!res.headersSent) {
+              res.status(500).send('Internal server error');
+            }
           }
         });
-        
-        httpServer.listen(port, () => {
+
+        app.post('/message', async (req, res) => {
+          try {
+            const url = new URL(req.url || '', `http://localhost:${port}`);
+            const sessionId = url.searchParams.get('sessionId');
+            
+            if (!sessionId) {
+              res.status(400).send('Missing session ID');
+              return;
+            }
+
+            const transport = this.transports.get(sessionId);
+            if (!transport) {
+              res.status(404).send('Session not found');
+              return;
+            }
+
+            await transport.handleMessage(req.body);
+            res.sendStatus(200);
+
+          } catch (error) {
+            console.error('Error in message endpoint:', error);
+            res.status(500).send('Internal server error');
+          }
+        });
+
+        app.get('/health', (req, res) => {
+          res.json({
+            status: 'healthy',
+            timestamp: new Date().toISOString(),
+            activeSessions: this.transports.size
+          });
+        });
+
+        app.listen(port, () => {
           console.error(`GitLab MCP Server running on HTTP port ${port}`);
+          console.error(`SSE endpoint: http://localhost:${port}/sse`);
+          console.error(`Message endpoint: http://localhost:${port}/message`);
+          console.error(`Health check: http://localhost:${port}/health`);
         });
       } else {
         // Default to stdio transport
