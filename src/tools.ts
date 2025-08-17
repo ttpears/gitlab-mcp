@@ -91,6 +91,9 @@ const getIssuesTool: Tool = {
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.getIssues(input.projectPath, input.first, input.after, credentials);
+    if (!result || !result.project || !result.project.issues) {
+      throw new Error('Project not found or issues are not accessible for the provided path');
+    }
     return result.project.issues;
   },
 };
@@ -108,6 +111,9 @@ const getMergeRequestsTool: Tool = {
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.getMergeRequests(input.projectPath, input.first, input.after, credentials);
+    if (!result || !result.project || !result.project.mergeRequests) {
+      throw new Error('Project not found or merge requests are not accessible for the provided path');
+    }
     return result.project.mergeRequests;
   },
 };
@@ -221,6 +227,57 @@ export const writeTools: Tool[] = [
   createIssueTool,
   createMergeRequestTool,
 ];
+
+// Discovery/introspection tools
+const resolvePathTool: Tool = {
+  name: 'resolve_path',
+  description: 'Resolve a GitLab path to either a project or group and list group projects when applicable',
+  requiresAuth: false,
+  requiresWrite: false,
+  inputSchema: withUserAuth(z.object({
+    fullPath: z.string().min(1).describe('Project or group full path (e.g., "group/subgroup/project")'),
+    first: z.number().min(1).max(100).default(20).describe('Number of items to retrieve when listing group projects'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.resolvePath(input.fullPath, input.first, input.after, credentials);
+    return result;
+  },
+};
+
+const getGroupProjectsTool: Tool = {
+  name: 'get_group_projects',
+  description: 'List projects inside a GitLab group (optionally filter by search term)',
+  requiresAuth: false,
+  requiresWrite: false,
+  inputSchema: withUserAuth(z.object({
+    fullPath: z.string().min(1).describe('Group full path (e.g., "group/subgroup")'),
+    searchTerm: z.string().optional().transform(v => v?.trim() || undefined).describe('Optional search term to filter group projects'),
+    first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getGroup(input.fullPath, input.first, input.after, input.searchTerm, credentials);
+    return result.group;
+  },
+};
+
+const getTypeFieldsTool: Tool = {
+  name: 'get_type_fields',
+  description: 'List available fields on a GraphQL type using introspected schema (requires schema to be introspected)',
+  requiresAuth: false,
+  requiresWrite: false,
+  inputSchema: withUserAuth(z.object({
+    typeName: z.string().min(1).describe('GraphQL type name (e.g., "Project")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    await client.introspectSchema(credentials);
+    return { typeName: input.typeName, fields: client.getTypeFields(input.typeName) };
+  },
+};
 
 // Search tools - comprehensive search capabilities for LLMs
 const globalSearchTool: Tool = {
@@ -439,5 +496,8 @@ export const tools: Tool[] = [
   ...readOnlyTools,
   ...userAuthTools,
   ...writeTools,
+  resolvePathTool,
+  getGroupProjectsTool,
+  getTypeFieldsTool,
   ...searchTools,
 ];

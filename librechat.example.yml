@@ -3,9 +3,9 @@
 
 mcpServers:
   gitlab:
-    # HTTP transport configuration (recommended)
-    type: streamable-http
-    url: "http://localhost:8008/message"
+    # SSE transport configuration (supported by this server)
+    type: sse
+    url: "http://localhost:8008/sse"
     
     # Server configuration
     serverInstructions: |
@@ -39,7 +39,7 @@ mcpServers:
 
 ---
 
-# Alternative configuration using Docker container directly
+# Alternative configuration using Docker container directly (SSE transport)
 # mcpServers:
 #   gitlab:
 #     command: docker
@@ -55,8 +55,8 @@ mcpServers:
 #       - -e=PORT=8008
 #       - -e=MCP_TRANSPORT=http
 #       - gitlab-mcp-server
-#     type: streamable-http
-#     url: "http://localhost:8008/message"
+#     type: sse
+#     url: "http://localhost:8008/sse"
 
 ---
 

@@ -1,0 +1,28 @@
+# Project rules and notes for gitlab-mcp
+
+- Authentication model
+  - Hybrid by default: shared read-only token for read tools; user PAT required for write tools.
+  - Env: GITLAB_SHARED_ACCESS_TOKEN, GITLAB_AUTH_MODE=hybrid, optional GITLAB_URL.
+  - Tools accept optional `userCredentials` with `accessToken` and optional `gitlabUrl`.
+
+- Transports
+  - Server provides stdio (default) and HTTP with SSE endpoints: GET `/sse`, POST `/message`.
+  - LibreChat config should use `type: sse` and `url: http://HOST:PORT/sse`.
+  - Streamable-http is not implemented yet. If needed, add a root `POST /` handler and wire to the MCP server.
+
+- GraphQL / Validation
+  - Avoid unsupported fields (e.g., `Project.defaultBranch`) across self-hosted instances; rely on introspection.
+  - Search term inputs are trimmed and empty strings are rejected for tools that require them.
+  - Issue/MR state: `all` maps to undefined; others map to GQL enums via UPPERCASE.
+
+- New discovery tools
+  - `resolve_path`: Distinguishes `group` vs `project` and lists group projects.
+  - `get_group_projects`: Lists projects within a group, supports search and pagination.
+  - `get_type_fields`: Lists fields for a given GraphQL type using introspection.
+
+- Error handling
+  - Read tools fall back to shared token; write tools throw if no user token is provided.
+  - Null guards ensure clearer errors when a group path is provided to project-only tools.
+
+- Maintenance
+  - Keep this file updated when adding tools, transports, or auth changes.

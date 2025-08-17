@@ -117,11 +117,6 @@ export class GitLabGraphQLClient {
           createdAt
           updatedAt
           visibility
-          defaultBranch
-          issuesEnabled
-          mergeRequestsEnabled
-          wikiEnabled
-          snippetsEnabled
           repository {
             tree {
               lastCommit {
@@ -364,10 +359,18 @@ export class GitLabGraphQLClient {
     return Object.keys(mutationType.getFields());
   }
 
+  getTypeFields(typeName: string): string[] {
+    if (!this.schema) return [];
+    const type = this.schema.getType(typeName);
+    if (!type || typeof (type as any).getFields !== 'function') return [];
+    const fields = (type as any).getFields();
+    return Object.keys(fields);
+  }
+
   // Search methods
-  async globalSearch(searchTerm: string, scope?: string, userConfig?: UserConfig): Promise<any> {
+  async globalSearch(searchTerm?: string, scope?: string, userConfig?: UserConfig): Promise<any> {
     const query = gql`
-      query globalSearch($search: String!, $first: Int!) {
+      query globalSearch($search: String, $first: Int!) {
         projects(search: $search, first: $first) {
           nodes {
             id
@@ -421,7 +424,7 @@ export class GitLabGraphQLClient {
     `;
     
     return this.query(query, { 
-      search: searchTerm, 
+      search: searchTerm || undefined, 
       first: this.config.maxPageSize 
     }, userConfig);
   }
@@ -747,6 +750,72 @@ export class GitLabGraphQLClient {
       path: path || "", 
       ref: ref || "HEAD" 
     }, userConfig);
+  }
+
+  async resolvePath(fullPath: string, first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
+    const query = gql`
+      query resolvePath($fullPath: ID!, $first: Int!, $after: String) {
+        project: project(fullPath: $fullPath) {
+          id
+          name
+          fullPath
+          webUrl
+          description
+          visibility
+        }
+        group: group(fullPath: $fullPath) {
+          id
+          name
+          fullPath
+          webUrl
+          description
+          projects(first: $first, after: $after) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              id
+              name
+              fullPath
+              webUrl
+              visibility
+              lastActivityAt
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { fullPath, first, after }, userConfig);
+  }
+
+  async getGroup(fullPath: string, first: number = 20, after?: string, searchTerm?: string, userConfig?: UserConfig): Promise<any> {
+    const query = gql`
+      query getGroup($fullPath: ID!, $first: Int!, $after: String, $search: String) {
+        group(fullPath: $fullPath) {
+          id
+          name
+          fullPath
+          webUrl
+          description
+          projects(first: $first, after: $after, search: $search) {
+            pageInfo {
+              hasNextPage
+              endCursor
+            }
+            nodes {
+              id
+              name
+              fullPath
+              webUrl
+              visibility
+              lastActivityAt
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { fullPath, first, after, search: searchTerm }, userConfig);
   }
 
   async getFileContent(
