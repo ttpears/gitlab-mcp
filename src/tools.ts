@@ -267,7 +267,7 @@ const searchIssuesTool: Tool = {
   requiresAuth: false,
   requiresWrite: false,
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().min(1).describe('Search term to find issues by title or description'),
+    searchTerm: z.string().optional().describe('Search term to find issues by title or description (leave empty to get recent issues)'),
     projectPath: z.string().optional().describe('Limit search to specific project (e.g., "group/project-name"). Leave empty to search globally.'),
     state: z.string().default('all').describe('Filter by issue state (opened, closed, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
