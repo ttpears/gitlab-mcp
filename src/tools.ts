@@ -269,7 +269,7 @@ const searchIssuesTool: Tool = {
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string().min(1).describe('Search term to find issues by title or description'),
     projectPath: z.string().optional().describe('Limit search to specific project (e.g., "group/project-name"). Leave empty to search globally.'),
-    state: z.enum(['opened', 'closed', 'all']).default('all').describe('Filter by issue state'),
+    state: z.string().default('all').describe('Filter by issue state (opened, closed, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
   })),
@@ -301,7 +301,7 @@ const searchMergeRequestsTool: Tool = {
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string().min(1).describe('Search term to find merge requests by title or description'),
     projectPath: z.string().optional().describe('Limit search to specific project (e.g., "group/project-name"). Leave empty to search globally.'),
-    state: z.enum(['opened', 'closed', 'merged', 'all']).default('all').describe('Filter by merge request state'),
+    state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
   })),
