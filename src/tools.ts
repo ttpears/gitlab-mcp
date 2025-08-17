@@ -15,7 +15,7 @@ export interface Tool {
 const UserCredentialsSchema = z.object({
   gitlabUrl: z.string().url().optional(),
   accessToken: z.string().min(1),
-}).optional();
+}).nullable().optional();
 
 // Helper to add user credentials to input schemas
 const withUserAuth = (baseSchema: z.ZodObject<any>, required = false) => {
@@ -24,7 +24,7 @@ const withUserAuth = (baseSchema: z.ZodObject<any>, required = false) => {
       userCredentials: z.object({
         gitlabUrl: z.string().url().optional(),
         accessToken: z.string().min(1),
-      }).describe('Your GitLab credentials (required for this operation)'),
+      }).nullable().describe('Your GitLab credentials (required for this operation)'),
     });
   } else {
     return baseSchema.extend({
@@ -229,7 +229,7 @@ const globalSearchTool: Tool = {
   requiresAuth: false,
   requiresWrite: false,
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().min(1).describe('Search term to find across GitLab (searches projects, issues, and merge requests)'),
+    searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term to find across GitLab (searches projects, issues, and merge requests)'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
