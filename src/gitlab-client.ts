@@ -144,8 +144,7 @@ export class GitLabGraphQLClient {
   async getProjects(first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
     const query = gql`
       query getProjects($first: Int!, $after: String) {
-        currentUser {
-          projects(first: $first, after: $after) {
+        projects(first: $first, after: $after) {
             pageInfo {
               hasNextPage
               hasPreviousPage
@@ -166,7 +165,6 @@ export class GitLabGraphQLClient {
               mergeRequestsEnabled
             }
           }
-        }
       }
     `;
     return this.query(query, { first, after }, userConfig);
