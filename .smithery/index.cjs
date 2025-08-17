@@ -38528,10 +38528,13 @@ var init_src = __esm({
           const useHttp = process.env.MCP_TRANSPORT === "http" || port;
           if (useHttp && port) {
             const httpServer = http.createServer((req, res) => {
-              if (req.url === "/sse" && req.method === "GET") {
+              const url = new URL(req.url || "", `http://localhost:${port}`);
+              const pathname = url.pathname;
+              
+              if (pathname === "/sse" && req.method === "GET") {
                 const transport = new SSEServerTransport("/message", res);
                 this.server.connect(transport);
-              } else if (req.url === "/message" && req.method === "POST") {
+              } else if (pathname === "/message" && req.method === "POST") {
                 let body = "";
                 req.on("data", (chunk) => {
                   body += chunk.toString();

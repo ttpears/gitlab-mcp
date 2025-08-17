@@ -4,6 +4,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import * as http from 'http';
+import { URL } from 'url';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -115,11 +116,14 @@ class GitLabMCPServer {
       if (useHttp && port) {
         // HTTP/SSE transport for LibreChat integration
         const httpServer = http.createServer((req, res) => {
-          if (req.url === '/sse' && req.method === 'GET') {
+          const url = new URL(req.url || '', `http://localhost:${port}`);
+          const pathname = url.pathname;
+          
+          if (pathname === '/sse' && req.method === 'GET') {
             // Handle SSE connection establishment - transport points to /message endpoint
             const transport = new SSEServerTransport('/message', res);
             this.server.connect(transport);
-          } else if (req.url === '/message' && req.method === 'POST') {
+          } else if (pathname === '/message' && req.method === 'POST') {
             // Handle MCP protocol messages
             let body = '';
             req.on('data', chunk => {
