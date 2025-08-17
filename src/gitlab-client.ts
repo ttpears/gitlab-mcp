@@ -467,9 +467,62 @@ export class GitLabGraphQLClient {
     after?: string, 
     userConfig?: UserConfig
   ): Promise<any> {
-    const query = gql`
-      query searchIssues($search: String!, $projectPath: ID, $state: IssueState, $first: Int!, $after: String) {
-        project(fullPath: $projectPath) {
+    const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
+
+    if (projectPath) {
+      const query = gql`
+        query searchIssuesProject($projectPath: ID!, $search: String, $state: IssueState, $first: Int!, $after: String) {
+          project(fullPath: $projectPath) {
+            issues(search: $search, state: $state, first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              nodes {
+                id
+                iid
+                title
+                description
+                state
+                webUrl
+                createdAt
+                updatedAt
+                closedAt
+                author {
+                  id
+                  username
+                  name
+                }
+                assignees {
+                  nodes {
+                    username
+                    name
+                  }
+                }
+                labels {
+                  nodes {
+                    title
+                    color
+                    description
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+      return this.query(query, { 
+        projectPath, 
+        search: searchTerm, 
+        state: mappedState, 
+        first, 
+        after 
+      }, userConfig);
+    } else {
+      const query = gql`
+        query searchIssuesGlobal($search: String, $state: IssueState, $first: Int!, $after: String) {
           issues(search: $search, state: $state, first: $first, after: $after) {
             pageInfo {
               hasNextPage
@@ -492,6 +545,10 @@ export class GitLabGraphQLClient {
                 username
                 name
               }
+              project {
+                fullPath
+                name
+              }
               assignees {
                 nodes {
                   username
@@ -508,56 +565,14 @@ export class GitLabGraphQLClient {
             }
           }
         }
-          pageInfo {
-            hasNextPage
-            hasPreviousPage
-            startCursor
-            endCursor
-          }
-          nodes {
-            id
-            iid
-            title
-            description
-            state
-            webUrl
-            createdAt
-            updatedAt
-            closedAt
-            author {
-              id
-              username
-              name
-            }
-            project {
-              fullPath
-              name
-            }
-            assignees {
-              nodes {
-                username
-                name
-              }
-            }
-            labels {
-              nodes {
-                title
-                color
-                description
-              }
-            }
-          }
-        }
-      }
-    `;
-    
-    return this.query(query, { 
-      search: searchTerm, 
-      projectPath, 
-      state: state?.toUpperCase(), 
-      first, 
-      after 
-    }, userConfig);
+      `;
+      return this.query(query, { 
+        search: searchTerm, 
+        state: mappedState, 
+        first, 
+        after 
+      }, userConfig);
+    }
   }
 
   async searchMergeRequests(
@@ -568,9 +583,70 @@ export class GitLabGraphQLClient {
     after?: string, 
     userConfig?: UserConfig
   ): Promise<any> {
-    const query = gql`
-      query searchMergeRequests($search: String!, $projectPath: ID, $state: MergeRequestState, $first: Int!, $after: String) {
-        project(fullPath: $projectPath) {
+    const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
+
+    if (projectPath) {
+      const query = gql`
+        query searchMergeRequestsProject($projectPath: ID!, $search: String, $state: MergeRequestState, $first: Int!, $after: String) {
+          project(fullPath: $projectPath) {
+            mergeRequests(search: $search, state: $state, first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              nodes {
+                id
+                iid
+                title
+                description
+                state
+                webUrl
+                createdAt
+                updatedAt
+                mergedAt
+                sourceBranch
+                targetBranch
+                author {
+                  id
+                  username
+                  name
+                }
+                assignees {
+                  nodes {
+                    username
+                    name
+                  }
+                }
+                reviewers {
+                  nodes {
+                    username
+                    name
+                  }
+                }
+                labels {
+                  nodes {
+                    title
+                    color
+                    description
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+      return this.query(query, { 
+        projectPath, 
+        search: searchTerm, 
+        state: mappedState, 
+        first, 
+        after 
+      }, userConfig);
+    } else {
+      const query = gql`
+        query searchMergeRequestsGlobal($search: String, $state: MergeRequestState, $first: Int!, $after: String) {
           mergeRequests(search: $search, state: $state, first: $first, after: $after) {
             pageInfo {
               hasNextPage
@@ -595,6 +671,10 @@ export class GitLabGraphQLClient {
                 username
                 name
               }
+              project {
+                fullPath
+                name
+              }
               assignees {
                 nodes {
                   username
@@ -617,69 +697,19 @@ export class GitLabGraphQLClient {
             }
           }
         }
-          pageInfo {
-            hasNextPage
-            hasPreviousPage
-            startCursor
-            endCursor
-          }
-          nodes {
-            id
-            iid
-            title
-            description
-            state
-            webUrl
-            createdAt
-            updatedAt
-            mergedAt
-            sourceBranch
-            targetBranch
-            author {
-              id
-              username
-              name
-            }
-            project {
-              fullPath
-              name
-            }
-            assignees {
-              nodes {
-                username
-                name
-              }
-            }
-            reviewers {
-              nodes {
-                username
-                name
-              }
-            }
-            labels {
-              nodes {
-                title
-                color
-                description
-              }
-            }
-          }
-        }
-      }
-    `;
-    
-    return this.query(query, { 
-      search: searchTerm, 
-      projectPath, 
-      state: state?.toUpperCase(), 
-      first, 
-      after 
-    }, userConfig);
+      `;
+      return this.query(query, { 
+        search: searchTerm, 
+        state: mappedState, 
+        first, 
+        after 
+      }, userConfig);
+    }
   }
 
   async searchRepositoryFiles(
     projectPath: string, 
-    searchTerm: string, 
+    path: string, 
     ref?: string, 
     userConfig?: UserConfig
   ): Promise<any> {
@@ -714,7 +744,7 @@ export class GitLabGraphQLClient {
     // Note: This searches file names. For content search, we'd need to use the search API
     return this.query(query, { 
       projectPath, 
-      path: "", 
+      path: path || "", 
       ref: ref || "HEAD" 
     }, userConfig);
   }

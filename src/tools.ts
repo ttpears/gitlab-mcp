@@ -250,7 +250,10 @@ const searchProjectsTool: Tool = {
   requiresAuth: false,
   requiresWrite: false,
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().min(1).describe('Search term to find projects by name or description'),
+    searchTerm: z.string()
+      .transform(val => val.trim())
+      .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
+      .describe('Search term to find projects by name or description'),
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
   })),
@@ -267,7 +270,7 @@ const searchIssuesTool: Tool = {
   requiresAuth: false,
   requiresWrite: false,
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().optional().describe('Search term to find issues by title or description (leave empty to get recent issues)'),
+    searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term to find issues by title or description (leave empty to get recent issues)'),
     projectPath: z.string().optional().describe('Limit search to specific project (e.g., "group/project-name"). Leave empty to search globally.'),
     state: z.string().default('all').describe('Filter by issue state (opened, closed, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
@@ -299,7 +302,10 @@ const searchMergeRequestsTool: Tool = {
   requiresAuth: false,
   requiresWrite: false,
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().min(1).describe('Search term to find merge requests by title or description'),
+    searchTerm: z.string()
+      .transform(val => val.trim())
+      .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
+      .describe('Search term to find merge requests by title or description'),
     projectPath: z.string().optional().describe('Limit search to specific project (e.g., "group/project-name"). Leave empty to search globally.'),
     state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
@@ -331,7 +337,10 @@ const searchUsersTool: Tool = {
   requiresAuth: false,
   requiresWrite: false,
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().min(1).describe('Search term to find users by username or name'),
+    searchTerm: z.string()
+      .transform(val => val.trim())
+      .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
+      .describe('Search term to find users by username or name'),
     first: z.number().min(1).max(100).default(20).describe('Number of users to retrieve'),
   })),
   handler: async (input, client, userConfig) => {
@@ -347,7 +356,10 @@ const searchGroupsTool: Tool = {
   requiresAuth: false,
   requiresWrite: false,
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().min(1).describe('Search term to find groups by name or path'),
+    searchTerm: z.string()
+      .transform(val => val.trim())
+      .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
+      .describe('Search term to find groups by name or path'),
     first: z.number().min(1).max(100).default(20).describe('Number of groups to retrieve'),
   })),
   handler: async (input, client, userConfig) => {
@@ -369,7 +381,7 @@ const browseRepositoryTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.searchRepositoryFiles(input.projectPath, '', input.ref, credentials);
+    const result = await client.searchRepositoryFiles(input.projectPath, input.path, input.ref, credentials);
     return {
       project: input.projectPath,
       path: input.path,
