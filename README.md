@@ -67,12 +67,17 @@ services:
 mcpServers:
   gitlab:
     type: streamable-http
-    url: "http://localhost:8008/message"
+    url: "http://localhost:8008/"
+    headers:
+      Authorization: "Bearer {{GITLAB_PAT}}"
+      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
     customUserVars:
-      GITLAB_ACCESS_TOKEN:
+      GITLAB_PAT:
         title: "GitLab Personal Access Token"
-        type: password
-        required: false
+        description: "PAT with api scope"
+      GITLAB_URL_OVERRIDE:
+        title: "GitLab URL (optional)"
+        description: "e.g., https://gitlab.yourdomain.com"
 ```
 
 5. **Restart LibreChat:**
@@ -200,6 +205,8 @@ Always require user-provided credentials:
 Always require user credentials with write permissions:
 - `create_issue` - Create new issues
 - `create_merge_request` - Create new merge requests
+ - `update_issue` - Update issue title/description/assignees/labels/due date (schema-aware)
+ - `update_merge_request` - Update MR title/description/assignees/reviewers/labels (schema-aware)
 
 ### Authentication Behavior by Mode
 
@@ -341,14 +348,33 @@ await callTool('search_merge_requests', {
 When using with LibreChat, users will be prompted for their credentials automatically:
 
 ```typescript
-// LibreChat handles authentication prompts
+// LibreChat stores PAT in creds UI; server reads Authorization header
 await callTool('create_merge_request', {
   projectPath: 'group/project',
   title: 'Feature: Add new functionality',
   sourceBranch: 'feature-branch',
   targetBranch: 'main',
   description: 'Implementation details...'
-  // userCredentials automatically provided by LibreChat
+})
+
+// Schema-aware issue update (IDs resolved automatically)
+await callTool('update_issue', {
+  projectPath: 'group/project',
+  iid: '123',
+  title: 'Updated title',
+  assigneeUsernames: ['alice'],
+  labelNames: ['High Priority'],
+  dueDate: '2025-12-31'
+})
+
+// Schema-aware MR update (reviewers apply to MRs, not issues)
+await callTool('update_merge_request', {
+  projectPath: 'group/project',
+  iid: '45',
+  title: 'Refined MR title',
+  reviewerUsernames: ['bob'],
+  assigneeUsernames: ['alice'],
+  labelNames: ['Backend']
 })
 ```
 
@@ -403,12 +429,17 @@ The server runs on HTTP port 8008 and integrates via `streamable-http` transport
 mcpServers:
   gitlab:
     type: streamable-http
-    url: "http://localhost:8008/message"
+    url: "http://localhost:8008/"
+    headers:
+      Authorization: "Bearer {{GITLAB_PAT}}"
+      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
     customUserVars:
-      GITLAB_ACCESS_TOKEN:
+      GITLAB_PAT:
         title: "GitLab Personal Access Token"
-        type: password
-        required: false
+        description: "PAT with api scope"
+      GITLAB_URL_OVERRIDE:
+        title: "GitLab URL (optional)"
+        description: "e.g., https://gitlab.yourdomain.com"
 ```
 
 ### **User Authentication Flow**
