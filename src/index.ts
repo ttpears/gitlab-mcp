@@ -128,7 +128,7 @@ class GitLabMCPServer {
         app.use((req, res, next) => {
           res.header('Access-Control-Allow-Origin', '*');
           res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-session-id, mcp-session-id');
+          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, x-session-id, mcp-session-id');
           res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id');
           if (req.method === 'OPTIONS') {
             res.sendStatus(200);
@@ -202,6 +202,17 @@ class GitLabMCPServer {
             const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
             if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
               const transport = this.httpTransports.get(sessionIdHeader)!;
+              // Refresh default creds from headers on each request (per-session best effort)
+              const authHeader = (req.headers['authorization'] as string) || '';
+              const gitlabUrlHeader = (req.headers['x-gitlab-url'] as string) || undefined;
+              if (authHeader) {
+                const token = authHeader.startsWith('Bearer ')
+                  ? authHeader.slice('Bearer '.length).trim()
+                  : authHeader.trim();
+                if (token) {
+                  this.defaultUserConfigFromHeaders = { accessToken: token, gitlabUrl: gitlabUrlHeader };
+                }
+              }
               await transport.handleRequest(req as any, res as any, (req as any).body);
               return;
             }

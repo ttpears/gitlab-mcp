@@ -733,6 +733,13 @@ export class GitLabGraphQLClient {
     return t.name || (t.ofType ? this.getTypeName(t.ofType) : undefined);
   }
 
+  private getEnumValues(enumTypeName: string | undefined): string[] {
+    if (!enumTypeName || !this.schema) return [];
+    const enumType = this.schema.getType(enumTypeName);
+    const values = (enumType && typeof (enumType as any).getValues === 'function') ? (enumType as any).getValues() : [];
+    return Array.isArray(values) ? values.map((v: any) => v.name) : [];
+  }
+
   async searchIssues(
     searchTerm: string, 
     projectPath?: string, 
@@ -750,6 +757,10 @@ export class GitLabGraphQLClient {
       const issuesField = projFields['issues'];
       const stateArgType = issuesField?.args?.find((a: any) => a.name === 'state')?.type;
       const stateEnum = this.getTypeName(stateArgType) || 'IssueState';
+      const allowed = this.getEnumValues(stateEnum).map(v => String(v));
+      const mapped = state
+        ? (allowed.find(v => v.toLowerCase() === state.toLowerCase()) || undefined)
+        : undefined;
 
       const query = gql`
         query searchIssuesProject($projectPath: ID!, $search: String, $state: ${stateEnum}, $first: Int!, $after: String) {
@@ -766,13 +777,17 @@ export class GitLabGraphQLClient {
           }
         }
       `;
-      return this.query(query, { projectPath, search: searchTerm, state: mappedState, first, after }, userConfig);
+      return this.query(query, { projectPath, search: searchTerm, state: mapped, first, after }, userConfig);
     } else {
       const queryType = this.schema.getQueryType();
       const qFields = queryType?.getFields?.() || {};
       const issuesField = qFields['issues'];
       const stateArgType = issuesField?.args?.find((a: any) => a.name === 'state')?.type;
       const stateEnum = this.getTypeName(stateArgType) || (this.schema.getType('IssuableState') ? 'IssuableState' : 'IssueState');
+      const allowed = this.getEnumValues(stateEnum).map(v => String(v));
+      const mapped = state
+        ? (allowed.find(v => v.toLowerCase() === state.toLowerCase()) || undefined)
+        : undefined;
 
       const query = gql`
         query searchIssuesGlobal($search: String, $state: ${stateEnum}, $first: Int!, $after: String) {
@@ -787,7 +802,7 @@ export class GitLabGraphQLClient {
           }
         }
       `;
-      return this.query(query, { search: searchTerm, state: mappedState, first, after }, userConfig);
+      return this.query(query, { search: searchTerm, state: mapped, first, after }, userConfig);
     }
   }
 
