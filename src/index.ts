@@ -116,8 +116,9 @@ class GitLabMCPServer {
         console.error('No shared access token provided. Schema will be introspected when user credentials are provided.');
       }
       
-      // Determine transport based on environment
-      const port = process.env.GITLAB_MCP_PORT ? parseInt(process.env.GITLAB_MCP_PORT) : null;
+      // Determine transport based on environment (support common hosting PORT too)
+      const rawPort = process.env.GITLAB_MCP_PORT || process.env.PORT;
+      const port = rawPort ? parseInt(rawPort) : null;
       const useHttp = process.env.MCP_TRANSPORT === 'http' || port;
       
       if (useHttp && port) {

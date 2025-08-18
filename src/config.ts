@@ -7,7 +7,7 @@ export const ConfigSchema = z.object({
   maxPageSize: z.number().min(1).max(100).default(50),
   defaultTimeout: z.number().min(1000).default(30000),
   // Authentication mode
-  authMode: z.enum(['shared', 'per-user', 'hybrid']).default('per-user'),
+  authMode: z.enum(['shared', 'per-user', 'hybrid']).default('hybrid'),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -26,7 +26,7 @@ export function loadConfig(): Config {
     sharedAccessToken: process.env.GITLAB_SHARED_ACCESS_TOKEN || undefined,
     maxPageSize: parseInt(process.env.GITLAB_MAX_PAGE_SIZE || '50'),
     defaultTimeout: parseInt(process.env.GITLAB_TIMEOUT || '30000'),
-    authMode: (process.env.GITLAB_AUTH_MODE as 'shared' | 'per-user' | 'hybrid') || 'per-user',
+    authMode: (process.env.GITLAB_AUTH_MODE as 'shared' | 'per-user' | 'hybrid') || 'hybrid',
   };
 
   return ConfigSchema.parse(config);

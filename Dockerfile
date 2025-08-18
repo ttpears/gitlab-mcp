@@ -3,20 +3,18 @@
 
 FROM node:20-alpine AS builder
 
-# Install git for cloning
-RUN apk add --no-cache git
-
 WORKDIR /app
 
-# Clone the repository
-RUN git clone https://github.com/ttpears/gitlab-mcp.git .
-
-# Install all dependencies (including dev deps for building)
+# Copy package manifests and install dependencies (including dev deps for building)
+COPY package*.json ./
 RUN if [ -f package-lock.json ]; then \
       npm ci; \
     else \
       npm install; \
     fi
+
+# Copy source code
+COPY . .
 
 # Build the application
 RUN npm run build

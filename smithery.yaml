@@ -34,6 +34,13 @@ server:
       description: "Request timeout in milliseconds"
       default: "30000"
       required: false
+    MCP_TRANSPORT:
+      description: "Transport mode; set to 'http' for hosted deployments"
+      default: "http"
+      required: false
+    GITLAB_MCP_PORT:
+      description: "Port to listen on (server also honors PORT if provided by host)"
+      required: false
 
 # LibreChat Integration
 librechat:
@@ -79,7 +86,7 @@ librechat:
          mcpServers:
            gitlab:
              type: streamable-http
-             url: "http://localhost:8008/sse"
+             url: "http://localhost:8008/"
              customUserVars:
                GITLAB_ACCESS_TOKEN:
                  title: "GitLab Personal Access Token"

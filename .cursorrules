@@ -6,9 +6,9 @@
   - Tools accept optional `userCredentials` with `accessToken` and optional `gitlabUrl`.
 
 - Transports
-  - Server provides stdio (default) and HTTP with SSE endpoints: GET `/sse`, POST `/message`.
-  - LibreChat config should use `type: sse` and `url: http://HOST:PORT/sse`.
-  - Streamable-http is not implemented yet. If needed, add a root `POST /` handler and wire to the MCP server.
+  - Server provides stdio (default) and HTTP with SSE endpoints: GET `/sse`, POST `/message`, plus a streamable HTTP endpoint at `/`.
+  - LibreChat (HTTP) should use `type: streamable-http` and `url: http://HOST:PORT/`.
+  - Hosted environments may provide `PORT`; server also respects `GITLAB_MCP_PORT` and `MCP_TRANSPORT=http`.
 
 - GraphQL / Validation
   - Avoid unsupported fields (e.g., `Project.defaultBranch`) across self-hosted instances; rely on introspection.
