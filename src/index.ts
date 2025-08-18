@@ -302,12 +302,12 @@ class GitLabMCPServer {
 
 // Smithery TypeScript runtime expects a default export that returns an MCP Server instance.
 // This factory prepares the server with all handlers but does not bind transports.
-export default function createMcpServer(): Server {
+export default function createMcpServer(_args: { sessionId: string; config: unknown }): Server {
   const instance = new GitLabMCPServer();
   // Return the underlying MCP Server; the host (e.g., Smithery) will call connect(transport)
   // and manage the Streamable HTTP session lifecycle.
   // @ts-ignore accessing private for integration factory
-  return instance["server"] as Server;
+  return (instance as any)["server"] as Server;
 }
 
 // Optional: expose a (currently empty) config schema for /.well-known/mcp-config
