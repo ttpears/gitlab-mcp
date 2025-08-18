@@ -42,7 +42,7 @@ GITLAB_AUTH_MODE=hybrid
 GITLAB_SHARED_ACCESS_TOKEN=your-optional-shared-token
 GITLAB_MAX_PAGE_SIZE=50
 GITLAB_TIMEOUT=30000
-PORT=8008
+GITLAB_MCP_PORT=8008
 MCP_TRANSPORT=http
 ```
 
@@ -419,7 +419,7 @@ Add these to your LibreChat `.env` file:
 GITLAB_URL=https://your-gitlab.com           # Your GitLab instance
 GITLAB_AUTH_MODE=hybrid                       # Authentication mode
 GITLAB_SHARED_ACCESS_TOKEN=                   # Optional shared token
-PORT=8008                                     # Server port
+GITLAB_MCP_PORT=8008                          # Server port (do NOT set PORT in LibreChat)
 MCP_TRANSPORT=http                            # Use HTTP transport
 ```
 

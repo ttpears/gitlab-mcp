@@ -52,7 +52,7 @@ mcpServers:
 #       - -e=GITLAB_URL=${GITLAB_URL:-https://gitlab.com}
 #       - -e=GITLAB_AUTH_MODE=${GITLAB_AUTH_MODE:-hybrid}  
 #       - -e=GITLAB_SHARED_ACCESS_TOKEN=${GITLAB_SHARED_ACCESS_TOKEN:-}
-#       - -e=PORT=8008
+#       - -e=GITLAB_MCP_PORT=8008
 #       - -e=MCP_TRANSPORT=http
 #       - gitlab-mcp-server
 #     type: sse
