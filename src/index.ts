@@ -6,9 +6,10 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as http from 'http';
 import { randomUUID } from 'node:crypto';
-import { URL } from 'url';
+import { URL, fileURLToPath } from 'url';
 import express from 'express';
 import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -41,6 +42,10 @@ class GitLabMCPServer {
 
     this.setupToolHandlers();
     this.setupErrorHandling();
+
+    // Initialize GitLab client using environment configuration
+    const config = loadConfig();
+    this.gitlabClient = new GitLabGraphQLClient(config);
   }
 
   private setupToolHandlers(): void {
@@ -101,7 +106,6 @@ class GitLabMCPServer {
   async run(): Promise<void> {
     try {
       const config = loadConfig();
-      this.gitlabClient = new GitLabGraphQLClient(config);
       
       // Try to introspect schema on startup if we have a shared token
       if (config.sharedAccessToken) {
@@ -116,10 +120,10 @@ class GitLabMCPServer {
         console.error('No shared access token provided. Schema will be introspected when user credentials are provided.');
       }
       
-      // Determine transport based on environment (support common hosting PORT too)
-      const rawPort = process.env.GITLAB_MCP_PORT || process.env.PORT;
-      const port = rawPort ? parseInt(rawPort) : null;
-      const useHttp = process.env.MCP_TRANSPORT === 'http' || port;
+      // Determine transport based on environment
+      // Note: For Smithery TypeScript runtime, run in stdio; their wrapper provides HTTP.
+      const port = process.env.GITLAB_MCP_PORT ? parseInt(process.env.GITLAB_MCP_PORT) : null;
+      const useHttp = process.env.MCP_TRANSPORT === 'http';
       
       if (useHttp && port) {
         // HTTP/SSE transport for LibreChat integration
@@ -296,8 +300,33 @@ class GitLabMCPServer {
   }
 }
 
-const server = new GitLabMCPServer();
-server.run().catch((error) => {
-  console.error('Server failed:', error);
-  process.exit(1);
-});
+// Smithery TypeScript runtime expects a default export that returns an MCP Server instance.
+// This factory prepares the server with all handlers but does not bind transports.
+export default function createMcpServer(): Server {
+  const instance = new GitLabMCPServer();
+  // Return the underlying MCP Server; the host (e.g., Smithery) will call connect(transport)
+  // and manage the Streamable HTTP session lifecycle.
+  // @ts-ignore accessing private for integration factory
+  return instance["server"] as Server;
+}
+
+// Optional: expose a (currently empty) config schema for /.well-known/mcp-config
+export const configSchema = z.object({});
+
+// Run in CLI mode only if this file is the program entry-point
+const isMain = (() => {
+  try {
+    const thisFile = fileURLToPath(import.meta.url);
+    return process.argv[1] && thisFile === process.argv[1];
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  const cli = new GitLabMCPServer();
+  cli.run().catch((error) => {
+    console.error('Server failed:', error);
+    process.exit(1);
+  });
+}
