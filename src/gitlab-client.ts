@@ -728,6 +728,11 @@ export class GitLabGraphQLClient {
     return this.query(query, { search: searchTerm, first, after }, userConfig);
   }
 
+  private getTypeName(t: any): string | undefined {
+    if (!t) return undefined;
+    return t.name || (t.ofType ? this.getTypeName(t.ofType) : undefined);
+  }
+
   async searchIssues(
     searchTerm: string, 
     projectPath?: string, 
@@ -736,111 +741,53 @@ export class GitLabGraphQLClient {
     after?: string, 
     userConfig?: UserConfig
   ): Promise<any> {
+    await this.introspectSchema(userConfig);
     const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
 
     if (projectPath) {
+      const projectType = this.schema.getType('Project');
+      const projFields = projectType?.getFields?.() || {};
+      const issuesField = projFields['issues'];
+      const stateArgType = issuesField?.args?.find((a: any) => a.name === 'state')?.type;
+      const stateEnum = this.getTypeName(stateArgType) || 'IssueState';
+
       const query = gql`
-        query searchIssuesProject($projectPath: ID!, $search: String, $state: IssueState, $first: Int!, $after: String) {
+        query searchIssuesProject($projectPath: ID!, $search: String, $state: ${stateEnum}, $first: Int!, $after: String) {
           project(fullPath: $projectPath) {
             issues(search: $search, state: $state, first: $first, after: $after) {
-              pageInfo {
-                hasNextPage
-                hasPreviousPage
-                startCursor
-                endCursor
-              }
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
-                id
-                iid
-                title
-                description
-                state
-                webUrl
-                createdAt
-                updatedAt
-                closedAt
-                author {
-                  id
-                  username
-                  name
-                }
-                assignees {
-                  nodes {
-                    username
-                    name
-                  }
-                }
-                labels {
-                  nodes {
-                    title
-                    color
-                    description
-                  }
-                }
+                id iid title description state webUrl createdAt updatedAt closedAt
+                author { id username name }
+                assignees { nodes { username name } }
+                labels { nodes { title color description } }
               }
             }
           }
         }
       `;
-      return this.query(query, { 
-        projectPath, 
-        search: searchTerm, 
-        state: mappedState, 
-        first, 
-        after 
-      }, userConfig);
+      return this.query(query, { projectPath, search: searchTerm, state: mappedState, first, after }, userConfig);
     } else {
+      const queryType = this.schema.getQueryType();
+      const qFields = queryType?.getFields?.() || {};
+      const issuesField = qFields['issues'];
+      const stateArgType = issuesField?.args?.find((a: any) => a.name === 'state')?.type;
+      const stateEnum = this.getTypeName(stateArgType) || (this.schema.getType('IssuableState') ? 'IssuableState' : 'IssueState');
+
       const query = gql`
-        query searchIssuesGlobal($search: String, $state: IssueState, $first: Int!, $after: String) {
+        query searchIssuesGlobal($search: String, $state: ${stateEnum}, $first: Int!, $after: String) {
           issues(search: $search, state: $state, first: $first, after: $after) {
-            pageInfo {
-              hasNextPage
-              hasPreviousPage
-              startCursor
-              endCursor
-            }
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
-              id
-              iid
-              title
-              description
-              state
-              webUrl
-              createdAt
-              updatedAt
-              closedAt
-              author {
-                id
-                username
-                name
-              }
-              project {
-                fullPath
-                name
-              }
-              assignees {
-                nodes {
-                  username
-                  name
-                }
-              }
-              labels {
-                nodes {
-                  title
-                  color
-                  description
-                }
-              }
+              id iid title description state webUrl createdAt updatedAt closedAt
+              author { id username name }
+              assignees { nodes { username name } }
+              labels { nodes { title color description } }
             }
           }
         }
       `;
-      return this.query(query, { 
-        search: searchTerm, 
-        state: mappedState, 
-        first, 
-        after 
-      }, userConfig);
+      return this.query(query, { search: searchTerm, state: mappedState, first, after }, userConfig);
     }
   }
 
