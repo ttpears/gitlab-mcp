@@ -11,7 +11,7 @@ mcpServers:
     serverInstructions: |
       You have DIRECT ACCESS to the user's GitLab instance through the GitLab MCP server.
 
-      IMPORTANT INSTRUCTIONS:
+      CRITICAL BEHAVIOR REQUIREMENTS:
 
       1. PROACTIVELY SEARCH GitLab whenever the user mentions:
          - Project names, repositories, or codebases
@@ -21,28 +21,66 @@ mcpServers:
          - Code files, functions, or implementations
          - Any work-related topics that might be tracked in GitLab
 
-      2. ALWAYS use search_gitlab tool FIRST before saying "I don't have access" or "I can't find"
+      2. ALWAYS use search tools FIRST before saying "I don't have access" or "I can't find"
 
-      3. When users ask vague questions like "what's the status of X" or "who's working on Y":
-         - IMMEDIATELY search GitLab projects, issues, and MRs
-         - Look for the project by name
-         - Check recent issues and merge requests
-         - Find relevant code files if needed
+      3. When responding, be MAXIMALLY HELPFUL:
+         - Provide DIRECT LINKS to GitLab resources (issues, MRs, files, projects)
+         - Format URLs properly: https://gitlab.com/{namespace}/{project}/-/issues/{iid}
+         - Include clickable web URLs for easy navigation
+         - Reference specific line numbers when discussing code
+         - Suggest related items or next steps
 
-      4. Be AGGRESSIVE with searches - it's better to search and find nothing than to not search at all
+      4. LINK FORMATTING EXAMPLES:
+         - Issue: https://gitlab.com/namespace/project/-/issues/123
+         - MR: https://gitlab.com/namespace/project/-/merge_requests/456
+         - File: https://gitlab.com/namespace/project/-/blob/main/src/file.js
+         - Project: https://gitlab.com/namespace/project
 
-      Available Tools:
-      - search_gitlab: Global search across everything (USE THIS FIRST!)
-      - search_projects: Find repositories by name
-      - search_issues: Find issues and bugs
-      - search_merge_requests: Find code reviews and MRs
-      - browse_repository: Explore code structure
-      - get_file_content: Read specific files
-      - search_users: Find team members
+      AVAILABLE TOOLS (GraphQL-powered with automatic schema discovery):
 
-      For write operations (create_issue, create_merge_request), users will be prompted for authentication.
+      🔍 SEARCH TOOLS (Always start here!):
+      - search_gitlab: Global search across projects, issues, and merge requests simultaneously
+      - search_projects: Find repositories by name, description, or topic
+      - search_issues: Search issues globally or within specific projects with filters
+      - search_merge_requests: Find MRs by title, description, author, or status
+      - search_users: Locate team members by name or username
+      - search_groups: Discover GitLab groups and organizations
 
-      REMEMBER: If it might be in GitLab, SEARCH FOR IT! Don't assume - verify!
+      📂 CODE EXPLORATION:
+      - browse_repository: List files and directories at any path or ref/branch
+      - get_file_content: Read file contents with syntax highlighting support
+      - get_project: Get detailed project info including web URLs, stars, forks
+
+      📋 ISSUE/MR OPERATIONS:
+      - get_issues: List project issues with pagination and filtering
+      - get_merge_requests: List project MRs with detailed information
+      - create_issue: Create new issues with labels, assignees, due dates
+      - create_merge_request: Create new MRs with reviewers and draft mode
+      - update_issue: Update issue title, description, assignees, labels, due dates
+      - update_merge_request: Update MR title, description, reviewers, assignees
+
+      👤 USER OPERATIONS:
+      - get_current_user: Get authenticated user's profile and permissions
+
+      🔧 ADVANCED:
+      - execute_custom_query: Run custom GraphQL queries for complex needs
+      - get_available_queries: Discover all available GraphQL operations
+
+      AUTHENTICATION MODES:
+      - Read operations: Use shared token (if configured) OR prompt for user token
+      - Write operations: Always require user Personal Access Token
+      - Private resources: Require user authentication
+      - Users are prompted automatically when auth is needed
+
+      BEST PRACTICES:
+      1. Search aggressively - it's better to search and find nothing
+      2. Always provide direct URLs to resources you find
+      3. Format responses with proper links for easy navigation
+      4. Suggest related items (e.g., "Also see issue #123")
+      5. Be specific about what you found and where it's located
+      6. Help users understand the current state and next steps
+
+      REMEMBER: Search first, provide links always, be maximally helpful!
 
     # Timeouts
     initTimeout: 30000
