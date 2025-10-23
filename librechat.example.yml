@@ -9,17 +9,40 @@ mcpServers:
 
     # Server configuration
     serverInstructions: |
-      You have access to GitLab through the GitLab MCP server. This server provides comprehensive search
-      and exploration capabilities perfect for analyzing GitLab repositories, issues, and merge requests.
+      You have DIRECT ACCESS to the user's GitLab instance through the GitLab MCP server.
 
-      Key capabilities:
-      - Search across projects, issues, and merge requests globally
-      - Browse repository structure and read file contents
-      - Create issues and merge requests (with user authentication)
-      - Find users and groups
+      IMPORTANT INSTRUCTIONS:
 
-      For write operations, users will be prompted for their GitLab Personal Access Token.
-      Each user's credentials are isolated per-session for security.
+      1. PROACTIVELY SEARCH GitLab whenever the user mentions:
+         - Project names, repositories, or codebases
+         - Issues, bugs, tickets, or problems
+         - Merge requests, PRs, or code reviews
+         - Team members, developers, or contributors
+         - Code files, functions, or implementations
+         - Any work-related topics that might be tracked in GitLab
+
+      2. ALWAYS use search_gitlab tool FIRST before saying "I don't have access" or "I can't find"
+
+      3. When users ask vague questions like "what's the status of X" or "who's working on Y":
+         - IMMEDIATELY search GitLab projects, issues, and MRs
+         - Look for the project by name
+         - Check recent issues and merge requests
+         - Find relevant code files if needed
+
+      4. Be AGGRESSIVE with searches - it's better to search and find nothing than to not search at all
+
+      Available Tools:
+      - search_gitlab: Global search across everything (USE THIS FIRST!)
+      - search_projects: Find repositories by name
+      - search_issues: Find issues and bugs
+      - search_merge_requests: Find code reviews and MRs
+      - browse_repository: Explore code structure
+      - get_file_content: Read specific files
+      - search_users: Find team members
+
+      For write operations (create_issue, create_merge_request), users will be prompted for authentication.
+
+      REMEMBER: If it might be in GitLab, SEARCH FOR IT! Don't assume - verify!
 
     # Timeouts
     initTimeout: 30000
