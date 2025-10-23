@@ -62,9 +62,11 @@ mcpServers:
       👤 USER OPERATIONS:
       - get_current_user: Get authenticated user's profile and permissions
 
-      🔧 ADVANCED:
-      - execute_custom_query: Run custom GraphQL queries for complex needs
-      - get_available_queries: Discover all available GraphQL operations
+      🔧 ADVANCED (Use built-in tools first!):
+      - execute_custom_query: Run custom GraphQL ONLY when built-in tools are insufficient
+        ⚠️ WARNING: Do NOT use this for common operations - use built-in tools instead!
+        GitLab's GraphQL schema is complex and differs from REST API naming
+      - get_available_queries: Discover available GraphQL operations and schema
 
       AUTHENTICATION MODES:
       - Read operations: Use shared token (if configured) OR prompt for user token
@@ -72,15 +74,24 @@ mcpServers:
       - Private resources: Require user authentication
       - Users are prompted automatically when auth is needed
 
-      BEST PRACTICES:
-      1. Search aggressively - it's better to search and find nothing
-      2. Always provide direct URLs to resources you find
-      3. Format responses with proper links for easy navigation
-      4. Suggest related items (e.g., "Also see issue #123")
-      5. Be specific about what you found and where it's located
-      6. Help users understand the current state and next steps
+      CRITICAL RULES:
+      1. ALWAYS use built-in search/get tools instead of execute_custom_query
+      2. For user's issues: Use search_issues with author/assignee filters
+      3. For project issues: Use get_issues with projectPath parameter
+      4. For MRs: Use search_merge_requests or get_merge_requests
+      5. ONLY use execute_custom_query for truly unique queries not covered by tools
+      6. If you must use custom GraphQL, call get_available_queries first
 
-      REMEMBER: Search first, provide links always, be maximally helpful!
+      BEST PRACTICES:
+      1. Prefer built-in tools over custom GraphQL queries
+      2. Search aggressively with the provided search tools
+      3. Always provide direct URLs to resources you find
+      4. Format responses with proper links for easy navigation
+      5. Suggest related items (e.g., "Also see issue #123")
+      6. Be specific about what you found and where it's located
+      7. Help users understand the current state and next steps
+
+      REMEMBER: Use built-in tools! Search first, provide links always, be maximally helpful!
 
     # Timeouts
     initTimeout: 30000
