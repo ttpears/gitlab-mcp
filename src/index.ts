@@ -25,7 +25,9 @@ class GitLabMCPServer {
   private httpTransports: Map<string, {
     transport: StreamableHTTPServerTransport;
     userConfig?: { accessToken: string; gitlabUrl?: string };
+    lastActivity: number;
   }> = new Map();
+  private sessionCleanupInterval?: NodeJS.Timeout;
 
   constructor() {
     this.server = new Server(
@@ -108,9 +110,44 @@ class GitLabMCPServer {
     };
 
     process.on('SIGINT', async () => {
+      if (this.sessionCleanupInterval) {
+        clearInterval(this.sessionCleanupInterval);
+      }
       await this.server.close();
       process.exit(0);
     });
+  }
+
+  /**
+   * Start periodic cleanup of inactive sessions
+   */
+  private startSessionCleanup(): void {
+    const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+    const CLEANUP_INTERVAL = 5 * 60 * 1000; // Check every 5 minutes
+
+    this.sessionCleanupInterval = setInterval(() => {
+      const now = Date.now();
+      const expiredSessions: string[] = [];
+
+      for (const [sessionId, data] of this.httpTransports.entries()) {
+        if (now - data.lastActivity > SESSION_TIMEOUT) {
+          expiredSessions.push(sessionId);
+        }
+      }
+
+      for (const sessionId of expiredSessions) {
+        const data = this.httpTransports.get(sessionId);
+        if (data) {
+          console.error(`[MCP] Session ${sessionId} expired due to inactivity`);
+          data.transport.close().catch(() => {});
+          this.httpTransports.delete(sessionId);
+        }
+      }
+
+      if (expiredSessions.length > 0) {
+        console.error(`[MCP] Cleaned up ${expiredSessions.length} expired session(s). Active sessions: ${this.httpTransports.size}`);
+      }
+    }, CLEANUP_INTERVAL);
   }
 
   /**
@@ -157,8 +194,9 @@ class GitLabMCPServer {
         return;
       }
 
-      // Get session ID from header
-      const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
+      // Get session ID from header (check both lowercase and capitalized)
+      const sessionIdHeader = (req.headers['mcp-session-id'] as string) ||
+                             (req.headers['Mcp-Session-Id'] as string) || '';
 
       if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
         // Existing session: reuse transport and update credentials
@@ -170,6 +208,10 @@ class GitLabMCPServer {
           sessionData.userConfig = userConfig;
         }
 
+        // Update last activity timestamp
+        sessionData.lastActivity = Date.now();
+
+        // Don't log every request, only session changes
         await sessionData.transport.handleRequest(req as any, res as any, (req as any).body);
         return;
       }
@@ -180,16 +222,25 @@ class GitLabMCPServer {
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sessionId: string) => {
             const userConfig = this.extractUserCredentials(req);
-            this.httpTransports.set(sessionId, { transport, userConfig });
-            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'shared'} credentials`);
+            this.httpTransports.set(sessionId, {
+              transport,
+              userConfig,
+              lastActivity: Date.now()
+            });
+            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'shared'} credentials (total sessions: ${this.httpTransports.size})`);
           },
         });
 
         transport.onclose = () => {
           if (transport.sessionId) {
-            console.error(`[MCP] Session ${transport.sessionId} closed`);
+            console.error(`[MCP] Session ${transport.sessionId} closed (remaining sessions: ${this.httpTransports.size - 1})`);
             this.httpTransports.delete(transport.sessionId);
           }
+        };
+
+        // Handle errors on the transport
+        transport.onerror = (error: Error) => {
+          console.error(`[MCP] Transport error for session ${transport.sessionId}:`, error.message);
         };
 
         await this.server.connect(transport);
@@ -331,6 +382,10 @@ class GitLabMCPServer {
           console.error(`Alternative endpoint: http://localhost:${port}/mcp`);
           console.error(`Health check: http://localhost:${port}/health`);
           console.error(`Transport: Streamable HTTP (MCP spec 2025-03-26)`);
+
+          // Start session cleanup
+          this.startSessionCleanup();
+          console.error(`Session cleanup enabled (30min timeout, checked every 5min)`);
         });
       } else {
         // Default to stdio transport
