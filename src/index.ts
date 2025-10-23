@@ -333,8 +333,15 @@ class GitLabMCPServer {
         // Disable X-Powered-By header
         app.disable('x-powered-by');
 
-        // Parse JSON bodies
-        app.use(express.json());
+        // Parse JSON bodies - but NOT for /message endpoint (SSE transport needs raw stream)
+        app.use((req, res, next) => {
+          if (req.path === '/message') {
+            // Skip JSON parsing for SSE message endpoint
+            next();
+          } else {
+            express.json()(req, res, next);
+          }
+        });
 
         // CORS and headers
         app.use((req, res, next) => {
