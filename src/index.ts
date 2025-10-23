@@ -177,6 +177,10 @@ class GitLabMCPServer {
    */
   private async handleStreamableHTTP(req: express.Request, res: express.Response): Promise<void> {
     try {
+      // Debug logging to understand what's happening
+      const hasBody = req.body && Object.keys(req.body).length > 0;
+      const bodyPreview = hasBody ? JSON.stringify(req.body).substring(0, 100) : 'empty';
+
       // Validate Accept header per MCP spec
       const acceptHeader = req.headers['accept'] || '';
       const supportsJson = acceptHeader.includes('application/json');
@@ -197,6 +201,8 @@ class GitLabMCPServer {
       // Get session ID from header (check both lowercase and capitalized)
       const sessionIdHeader = (req.headers['mcp-session-id'] as string) ||
                              (req.headers['Mcp-Session-Id'] as string) || '';
+
+      console.error(`[MCP] Request: ${req.method} session=${sessionIdHeader || 'none'} body=${bodyPreview}`);
 
       if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
         // Existing session: reuse transport and update credentials
@@ -295,12 +301,26 @@ class GitLabMCPServer {
         // Streamable HTTP transport for LibreChat and modern MCP clients
         const app = express();
 
+        // Disable X-Powered-By header
+        app.disable('x-powered-by');
+
+        // Parse JSON bodies
         app.use(express.json());
+
+        // CORS and headers
         app.use((req, res, next) => {
           res.header('Access-Control-Allow-Origin', '*');
           res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID');
+          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID, Cache-Control');
           res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+
+          // Disable buffering for SSE streams
+          if (req.headers.accept?.includes('text/event-stream')) {
+            res.setHeader('Cache-Control', 'no-cache');
+            res.setHeader('Connection', 'keep-alive');
+            res.setHeader('X-Accel-Buffering', 'no');
+          }
+
           if (req.method === 'OPTIONS') {
             res.sendStatus(200);
             return;
