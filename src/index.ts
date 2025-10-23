@@ -405,11 +405,13 @@ class GitLabMCPServer {
               return;
             }
 
-            await transport.handlePostMessage(req.body, res);
-            res.sendStatus(200);
+            // The SDK's handlePostMessage needs the full request object, not just body
+            await transport.handlePostMessage(req as any, res as any);
           } catch (error) {
             console.error('[MCP] Error in message endpoint:', error);
-            res.status(500).send('Internal server error');
+            if (!res.headersSent) {
+              res.status(500).send('Internal server error');
+            }
           }
         });
 
