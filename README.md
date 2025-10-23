@@ -1,4 +1,5 @@
 # GitLab MCP Server
+[![smithery badge](https://smithery.ai/badge/@ttpears/gitlab-mcp)](https://smithery.ai/server/@ttpears/gitlab-mcp)
 
 A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with automatic schema discovery and supports self-hosted GitLab instances. **Perfect for LLM-powered GitLab exploration and analysis.**
 
@@ -34,6 +35,14 @@ A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with aut
 - **Smithery install support** for easy deployment
 
 ## Installation
+
+### Installing via Smithery
+
+To install GitLab MCP Server automatically via [Smithery](https://smithery.ai/server/@ttpears/gitlab-mcp):
+
+```bash
+npx -y @smithery/cli install @ttpears/gitlab-mcp
+```
 
 ### 📁 **File Structure Note**
 - **`Dockerfile`** - Standard Dockerfile (copy as `Dockerfile.mcp-gitlab` for LibreChat integration)
@@ -107,7 +116,7 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 5. **Copy and run** the generated installation command:
    ```bash
    # Example command (actual command from Smithery)
-   npx @smithery/cli install gitlab-mcp-server
+   npx -y @smithery/cli install gitlab-mcp-server
    ```
 6. **Configure in your `librechat.yml`** (Smithery will provide the exact configuration):
    ```yaml
