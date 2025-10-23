@@ -1,10 +1,32 @@
 # LibreChat Integration - Add this to your LibreChat docker-compose.override.yml
 # Then restart with: docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 #
-# Requirements:
+# Setup Instructions:
 # 1. Copy Dockerfile to your LibreChat root directory as Dockerfile.mcp-gitlab
-# 2. Add GitLab environment variables to your .env file
+#    cp Dockerfile /path/to/librechat/Dockerfile.mcp-gitlab
+#
+# 2. Add GitLab environment variables to your LibreChat .env file:
+#    GITLAB_URL=https://gitlab.com
+#    GITLAB_AUTH_MODE=hybrid
+#    GITLAB_SHARED_ACCESS_TOKEN=your-optional-shared-token
+#    GITLAB_MAX_PAGE_SIZE=50
+#    GITLAB_TIMEOUT=30000
+#    GITLAB_MCP_PORT=8008
+#    MCP_TRANSPORT=http
+#
 # 3. Add this service configuration to docker-compose.override.yml
+#
+# 4. Configure in librechat.yml (see librechat.example.yml)
+#    mcpServers:
+#      gitlab:
+#        type: streamable-http
+#        url: "http://gitlab-mcp:8008/"
+#        headers:
+#          Authorization: "Bearer {{GITLAB_PAT}}"
+#          X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
+#
+# 5. Restart LibreChat:
+#    docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
 
 services:
   gitlab-mcp:
@@ -13,8 +35,21 @@ services:
       dockerfile: Dockerfile.mcp-gitlab
     env_file:
       - .env
+    environment:
+      # These can also be set in .env file (recommended)
+      # GITLAB_URL: "https://gitlab.com"
+      # GITLAB_AUTH_MODE: "hybrid"
+      # GITLAB_SHARED_ACCESS_TOKEN: ""
+      # GITLAB_MCP_PORT: "8008"
+      # MCP_TRANSPORT: "http"
     ports:
       - "8008:8008"
     networks:
       - librechat
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('GitLab MCP Server is healthy')"]
+      interval: 30s
+      timeout: 3s
+      start_period: 5s
+      retries: 3

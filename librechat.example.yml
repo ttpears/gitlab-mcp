@@ -3,64 +3,76 @@
 
 mcpServers:
   gitlab:
-    # SSE transport configuration (supported by this server)
-    type: sse
-    url: "http://localhost:8008/sse"
-    
+    # Streamable HTTP transport (MCP spec 2025-03-26)
+    type: streamable-http
+    url: "http://gitlab-mcp:8008/"
+
+    # Headers for user authentication (passed per-session)
+    headers:
+      Authorization: "Bearer {{GITLAB_PAT}}"
+      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
+
     # Server configuration
     serverInstructions: |
-      You have access to GitLab through the GitLab MCP server. This server provides comprehensive search 
+      You have access to GitLab through the GitLab MCP server. This server provides comprehensive search
       and exploration capabilities perfect for analyzing GitLab repositories, issues, and merge requests.
-      
+
       Key capabilities:
       - Search across projects, issues, and merge requests globally
       - Browse repository structure and read file contents
       - Create issues and merge requests (with user authentication)
       - Find users and groups
-      
+
       For write operations, users will be prompted for their GitLab Personal Access Token.
-    
+      Each user's credentials are isolated per-session for security.
+
     # Timeouts
     initTimeout: 30000
     timeout: 120000
-    
+
     # User-specific variables for authentication
     customUserVars:
-      GITLAB_ACCESS_TOKEN:
+      GITLAB_PAT:
         title: "GitLab Personal Access Token"
         description: "Your GitLab Personal Access Token with 'api' scope for full functionality or 'read_api' for read-only access"
         type: password
         required: false
-      GITLAB_USER_URL:
+      GITLAB_URL_OVERRIDE:
         title: "GitLab Instance URL (Optional)"
-        description: "Your GitLab instance URL (leave empty to use server default)"
+        description: "Your GitLab instance URL (e.g., https://gitlab.yourdomain.com). Leave empty to use server default."
         type: url
         required: false
 
 ---
 
-# Alternative configuration using Docker container directly (SSE transport)
+# Alternative: Standalone Docker container (Streamable HTTP)
+# Use this if you want to run the server as a separate container
+# instead of via docker-compose.override.yml
+#
 # mcpServers:
 #   gitlab:
-#     command: docker
-#     args:
-#       - run
-#       - --rm
-#       - -i
-#       - -p=8008:8008
-#       - --name=gitlab-mcp-server
-#       - -e=GITLAB_URL=${GITLAB_URL:-https://gitlab.com}
-#       - -e=GITLAB_AUTH_MODE=${GITLAB_AUTH_MODE:-hybrid}  
-#       - -e=GITLAB_SHARED_ACCESS_TOKEN=${GITLAB_SHARED_ACCESS_TOKEN:-}
-#       - -e=GITLAB_MCP_PORT=8008
-#       - -e=MCP_TRANSPORT=http
-#       - gitlab-mcp-server
-#     type: sse
-#     url: "http://localhost:8008/sse"
+#     type: streamable-http
+#     url: "http://localhost:8008/"
+#     headers:
+#       Authorization: "Bearer {{GITLAB_PAT}}"
+#       X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
+#     customUserVars:
+#       GITLAB_PAT:
+#         title: "GitLab Personal Access Token"
+#         description: "PAT with 'api' or 'read_api' scope"
+#         type: password
+#         required: false
+#       GITLAB_URL_OVERRIDE:
+#         title: "GitLab URL (Optional)"
+#         description: "e.g., https://gitlab.yourdomain.com"
+#         type: url
+#         required: false
 
 ---
 
-# Configuration for Smithery.ai installation (stdio transport)
+# Alternative: Smithery.ai installation (stdio transport)
+# Use this for Smithery.ai deployments which use stdio internally
+#
 # mcpServers:
 #   gitlab:
 #     command: npx
