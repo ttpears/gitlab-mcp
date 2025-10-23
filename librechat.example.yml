@@ -3,14 +3,9 @@
 
 mcpServers:
   gitlab:
-    # Streamable HTTP transport (MCP spec 2025-03-26)
-    type: streamable-http
-    url: "http://gitlab-mcp:8008/"
-
-    # Headers for user authentication (passed per-session)
-    headers:
-      Authorization: "Bearer {{GITLAB_PAT}}"
-      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
+    # SSE transport (recommended for LibreChat)
+    type: sse
+    url: "http://gitlab-mcp:8008/sse"
 
     # Server configuration
     serverInstructions: |
@@ -45,14 +40,29 @@ mcpServers:
 
 ---
 
-# Alternative: Standalone Docker container (Streamable HTTP)
-# Use this if you want to run the server as a separate container
-# instead of via docker-compose.override.yml
+# Alternative: Standalone container (SSE transport)
+# Use this if running the server outside docker-compose
+#
+# mcpServers:
+#   gitlab:
+#     type: sse
+#     url: "http://localhost:8008/sse"
+#     customUserVars:
+#       GITLAB_PAT:
+#         title: "GitLab Personal Access Token"
+#         description: "PAT with 'api' or 'read_api' scope"
+#         type: password
+#         required: false
+
+---
+
+# Alternative: Streamable HTTP (for non-LibreChat clients)
+# Only use if your client specifically supports Streamable HTTP
 #
 # mcpServers:
 #   gitlab:
 #     type: streamable-http
-#     url: "http://localhost:8008/"
+#     url: "http://gitlab-mcp:8008/"
 #     headers:
 #       Authorization: "Bearer {{GITLAB_PAT}}"
 #       X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"

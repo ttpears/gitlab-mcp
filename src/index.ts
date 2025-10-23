@@ -2,6 +2,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as http from 'http';
 import { randomUUID } from 'node:crypto';
@@ -22,6 +23,7 @@ import { tools } from './tools.js';
 class GitLabMCPServer {
   private server: Server;
   private gitlabClient!: GitLabGraphQLClient;
+  private sseTransports: Map<string, SSEServerTransport> = new Map();
   private httpTransports: Map<string, {
     transport: StreamableHTTPServerTransport;
     userConfig?: { accessToken: string; gitlabUrl?: string };
@@ -122,8 +124,8 @@ class GitLabMCPServer {
    * Start periodic cleanup of inactive sessions
    */
   private startSessionCleanup(): void {
-    const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
-    const CLEANUP_INTERVAL = 5 * 60 * 1000; // Check every 5 minutes
+    const SESSION_TIMEOUT = 10 * 60 * 1000; // 10 minutes (reduced from 30)
+    const CLEANUP_INTERVAL = 2 * 60 * 1000; // Check every 2 minutes (reduced from 5)
 
     this.sessionCleanupInterval = setInterval(() => {
       const now = Date.now();
@@ -224,6 +226,33 @@ class GitLabMCPServer {
 
       // New session initialization
       if (req.method === 'POST') {
+        // If we have too many sessions, clean up old ones immediately
+        if (this.httpTransports.size > 10) {
+          const now = Date.now();
+          const oldSessions: string[] = [];
+
+          // Find sessions older than 5 minutes
+          for (const [sessionId, data] of this.httpTransports.entries()) {
+            if (now - data.lastActivity > 5 * 60 * 1000) {
+              oldSessions.push(sessionId);
+            }
+          }
+
+          // Close and remove old sessions
+          for (const sessionId of oldSessions) {
+            const data = this.httpTransports.get(sessionId);
+            if (data) {
+              console.error(`[MCP] Force-closing old session ${sessionId}`);
+              data.transport.close().catch(() => {});
+              this.httpTransports.delete(sessionId);
+            }
+          }
+
+          if (oldSessions.length > 0) {
+            console.error(`[MCP] Emergency cleanup: removed ${oldSessions.length} old sessions (total now: ${this.httpTransports.size})`);
+          }
+        }
+
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sessionId: string) => {
@@ -328,7 +357,63 @@ class GitLabMCPServer {
           next();
         });
 
-        // Streamable HTTP endpoint at root (primary endpoint)
+        // SSE transport endpoints for LibreChat compatibility
+        app.get('/sse', async (req, res) => {
+          try {
+            console.error('[MCP] New SSE connection request');
+
+            const sessionId = (req.query.sessionId as string) || randomUUID();
+
+            if (this.sseTransports.has(sessionId)) {
+              console.error(`[MCP] SSE session ${sessionId} already exists, rejecting`);
+              res.status(409).send('Session already exists');
+              return;
+            }
+
+            const transport = new SSEServerTransport('/message', res);
+            this.sseTransports.set(transport.sessionId, transport);
+
+            console.error(`[MCP] SSE session ${transport.sessionId} created (total SSE sessions: ${this.sseTransports.size})`);
+
+            transport.onclose = () => {
+              console.error(`[MCP] SSE session ${transport.sessionId} closed`);
+              this.sseTransports.delete(transport.sessionId);
+            };
+
+            await this.server.connect(transport);
+          } catch (error) {
+            console.error('[MCP] Error in SSE endpoint:', error);
+            if (!res.headersSent) {
+              res.status(500).send('Internal server error');
+            }
+          }
+        });
+
+        app.post('/message', async (req, res) => {
+          try {
+            const url = new URL(req.url || '', `http://localhost:${port}`);
+            const sessionId = url.searchParams.get('sessionId');
+
+            if (!sessionId) {
+              res.status(400).send('Missing session ID');
+              return;
+            }
+
+            const transport = this.sseTransports.get(sessionId);
+            if (!transport) {
+              res.status(404).send('Session not found');
+              return;
+            }
+
+            await transport.handlePostMessage(req.body, res);
+            res.sendStatus(200);
+          } catch (error) {
+            console.error('[MCP] Error in message endpoint:', error);
+            res.status(500).send('Internal server error');
+          }
+        });
+
+        // Streamable HTTP endpoint at root (for other clients)
         app.all('/', (req, res) => this.handleStreamableHTTP(req, res));
 
         // Alternative /mcp endpoint for container compatibility
@@ -390,22 +475,24 @@ class GitLabMCPServer {
           res.json({
             status: 'healthy',
             timestamp: new Date().toISOString(),
-            activeSessions: this.httpTransports.size,
-            transport: 'streamable-http',
+            transports: {
+              sse: this.sseTransports.size,
+              streamableHttp: this.httpTransports.size
+            },
             protocol: '2025-03-26'
           });
         });
 
         app.listen(port, () => {
           console.error(`GitLab MCP Server running on HTTP port ${port}`);
-          console.error(`Streamable HTTP endpoint: http://localhost:${port}/`);
-          console.error(`Alternative endpoint: http://localhost:${port}/mcp`);
+          console.error(`SSE transport: http://localhost:${port}/sse (for LibreChat)`);
+          console.error(`Streamable HTTP: http://localhost:${port}/ (for other clients)`);
           console.error(`Health check: http://localhost:${port}/health`);
-          console.error(`Transport: Streamable HTTP (MCP spec 2025-03-26)`);
+          console.error(`Supported transports: SSE, Streamable HTTP`);
 
           // Start session cleanup
           this.startSessionCleanup();
-          console.error(`Session cleanup enabled (30min timeout, checked every 5min)`);
+          console.error(`Session cleanup enabled (10min timeout, checked every 2min)`);
         });
       } else {
         // Default to stdio transport
