@@ -2,6 +2,18 @@
 
 A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with automatic schema discovery and supports self-hosted GitLab instances. **Perfect for LLM-powered GitLab exploration and analysis.**
 
+## 🚀 **Recent Updates (2025-10-22)**
+
+**Major refactor for LibreChat compatibility:**
+- ✅ **Streamable HTTP transport** (MCP spec 2025-03-26) - Removed deprecated SSE
+- ✅ **Per-session credential isolation** - Fixed credential bleeding between users
+- ✅ **Proper session management** - Added HTTP 404/400 handling and DELETE support
+- ✅ **Accept header validation** - Full compliance with MCP specification
+- ✅ **Connection resilience** - Improved error handling and reconnection logic
+- ✅ **Consolidated endpoints** - Removed duplicate code, cleaner architecture
+
+**These changes resolve LibreChat disconnection issues and improve overall stability.**
+
 ## ✨ **Key Features for LLMs**
 
 - 🔍 **Comprehensive Search**: Global search across projects, issues, merge requests, users, and groups
@@ -9,6 +21,7 @@ A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with aut
 - 🤝 **Dual Authentication**: Shared read-only access + per-user authentication for write operations
 - 🧠 **LLM-Optimized**: Tools designed specifically for AI analysis and exploration
 - 🔄 **GraphQL Discovery**: Automatic schema introspection for dynamic capabilities
+- 🔒 **Session Isolation**: Per-session credential management prevents cross-user data leaks
 
 ## Features
 
@@ -402,7 +415,7 @@ await callTool('execute_custom_query', {
 
 ## LibreChat Integration
 
-The GitLab MCP server integrates with LibreChat using the same pattern as the BookStack MCP server.
+The GitLab MCP server uses **Streamable HTTP** transport (MCP spec 2025-03-26) for optimal compatibility with LibreChat and modern MCP clients.
 
 ### **Docker Integration (Recommended)**
 
@@ -424,12 +437,12 @@ MCP_TRANSPORT=http                            # Use HTTP transport
 ```
 
 ### **LibreChat Configuration**
-The server runs on HTTP port 8008 and integrates via `streamable-http` transport:
+The server uses **Streamable HTTP** transport on port 8008:
 ```yaml
 mcpServers:
   gitlab:
     type: streamable-http
-    url: "http://localhost:8008/"
+    url: "http://gitlab-mcp:8008/"
     headers:
       Authorization: "Bearer {{GITLAB_PAT}}"
       X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
@@ -442,11 +455,20 @@ mcpServers:
         description: "e.g., https://gitlab.yourdomain.com"
 ```
 
+### **Transport Features**
+- ✅ **Streamable HTTP** (MCP spec 2025-03-26)
+- ✅ **Session management** with per-session credential isolation
+- ✅ **Connection resilience** with proper error handling
+- ✅ **Accept header validation** per MCP specification
+- ✅ **DELETE support** for explicit session termination
+- ✅ **Bidirectional communication** with streaming support
+
 ### **User Authentication Flow**
 - **Read operations**: Use shared token (if configured) or prompt for user token
 - **Write operations**: Always prompt for user Personal Access Token
 - **Private data**: Requires user authentication for access
 - **LibreChat handles**: Automatic credential prompts and management
+- **Session isolation**: Each user's credentials are stored per-session (never shared between users)
 
 ## GraphQL Schema Discovery
 
@@ -510,26 +532,58 @@ The server includes comprehensive error handling:
 
 ### Common Issues
 
-1. **Authentication Failed**
+1. **LibreChat Connection Drops / Reconnecting**
+   - ✅ **Fixed in v1.0.0+**: Updated to Streamable HTTP transport
+   - Check that LibreChat config uses `type: streamable-http`
+   - Verify URL points to `http://gitlab-mcp:8008/` (not `/sse`)
+   - Check Docker logs: `docker logs librechat` and `docker logs gitlab-mcp`
+   - Ensure both containers are on the same network
+
+2. **Authentication Failed**
    - Verify `GITLAB_ACCESS_TOKEN` is correct
    - Ensure token has `read_api` or `api` scope
    - Check token hasn't expired
+   - For LibreChat: Verify user provided valid PAT in credentials UI
 
-2. **Connection Issues**
-   - Verify `GITLAB_URL` is accessible
+3. **Session Not Found / 404 Errors**
+   - This is normal behavior when sessions expire
+   - LibreChat will automatically reinitialize
+   - Check `activeSessions` in health endpoint: `curl http://localhost:8008/health`
+
+4. **Connection Issues**
+   - Verify `GITLAB_URL` is accessible from container
    - Check firewall/proxy settings
    - Confirm SSL certificates are valid
+   - Test connectivity: `docker exec gitlab-mcp curl -I https://gitlab.com`
 
-3. **Schema Introspection Failed**
+5. **Schema Introspection Failed**
    - Ensure GitLab instance supports GraphQL
    - Verify API endpoint is `/api/graphql`
-   - Check GitLab version compatibility
+   - Check GitLab version compatibility (GitLab 12.0+)
 
 ### Debug Logging
 
 Set `NODE_ENV=development` for detailed logging:
 ```bash
 NODE_ENV=development GITLAB_URL=https://your-gitlab.com npm start
+```
+
+### Health Check
+
+Test server health and active sessions:
+```bash
+curl http://localhost:8008/health
+```
+
+Expected response:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-10-22T12:00:00.000Z",
+  "activeSessions": 2,
+  "transport": "streamable-http",
+  "protocol": "2025-03-26"
+}
 ```
 
 ## Contributing

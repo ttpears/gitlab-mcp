@@ -2,7 +2,6 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as http from 'http';
 import { randomUUID } from 'node:crypto';
@@ -23,15 +22,16 @@ import { tools } from './tools.js';
 class GitLabMCPServer {
   private server: Server;
   private gitlabClient!: GitLabGraphQLClient;
-  private transports: Map<string, SSEServerTransport> = new Map();
-  private httpTransports: Map<string, StreamableHTTPServerTransport> = new Map();
-  private defaultUserConfigFromHeaders?: { accessToken: string; gitlabUrl?: string };
+  private httpTransports: Map<string, {
+    transport: StreamableHTTPServerTransport;
+    userConfig?: { accessToken: string; gitlabUrl?: string };
+  }> = new Map();
 
   constructor() {
     this.server = new Server(
       {
         name: 'gitlab-mcp-server',
-        version: '1.0.0',
+        version: '1.1.0',
       },
       {
         capabilities: {
@@ -59,9 +59,9 @@ class GitLabMCPServer {
       };
     });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: args } = request.params;
-      
+
       const tool = tools.find(t => t.name === name);
       if (!tool) {
         throw new McpError(ErrorCode.MethodNotFound, `Tool ${name} not found`);
@@ -69,12 +69,22 @@ class GitLabMCPServer {
 
       try {
         const validatedInput = tool.inputSchema.parse(args || {});
-        // Extract user credentials if provided, else use defaults from headers (streamable-http)
-        const userConfig = validatedInput.userCredentials || this.defaultUserConfigFromHeaders;
+
+        // Extract user credentials: prioritize args, fallback to session-specific config
+        let userConfig = validatedInput.userCredentials;
+
+        // If no credentials in args, try to get from session context
+        if (!userConfig && extra?._meta?.sessionId) {
+          const sessionData = this.httpTransports.get(extra._meta.sessionId as string);
+          if (sessionData?.userConfig) {
+            userConfig = sessionData.userConfig;
+          }
+        }
+
         delete validatedInput.userCredentials; // Remove from input to avoid passing to handler
-        
+
         const result = await tool.handler(validatedInput, this.gitlabClient, userConfig);
-        
+
         return {
           content: [
             {
@@ -103,6 +113,111 @@ class GitLabMCPServer {
     });
   }
 
+  /**
+   * Extract and validate user credentials from request headers
+   */
+  private extractUserCredentials(req: express.Request): { accessToken: string; gitlabUrl?: string } | undefined {
+    const authHeader = (req.headers['authorization'] as string) || '';
+    const gitlabUrlHeader = (req.headers['x-gitlab-url'] as string) || undefined;
+
+    if (!authHeader) {
+      return undefined;
+    }
+
+    const token = authHeader.startsWith('Bearer ')
+      ? authHeader.slice('Bearer '.length).trim()
+      : authHeader.trim();
+
+    if (!token) {
+      return undefined;
+    }
+
+    return { accessToken: token, gitlabUrl: gitlabUrlHeader };
+  }
+
+  /**
+   * Shared handler for Streamable HTTP requests (used by both / and /mcp endpoints)
+   */
+  private async handleStreamableHTTP(req: express.Request, res: express.Response): Promise<void> {
+    try {
+      // Validate Accept header per MCP spec
+      const acceptHeader = req.headers['accept'] || '';
+      const supportsJson = acceptHeader.includes('application/json');
+      const supportsSse = acceptHeader.includes('text/event-stream');
+
+      if (!supportsJson && !supportsSse) {
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Bad Request: Accept header must include application/json or text/event-stream'
+          },
+          id: null,
+        });
+        return;
+      }
+
+      // Get session ID from header
+      const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
+
+      if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
+        // Existing session: reuse transport and update credentials
+        const sessionData = this.httpTransports.get(sessionIdHeader)!;
+        const userConfig = this.extractUserCredentials(req);
+
+        // Update session-specific credentials if provided
+        if (userConfig) {
+          sessionData.userConfig = userConfig;
+        }
+
+        await sessionData.transport.handleRequest(req as any, res as any, (req as any).body);
+        return;
+      }
+
+      // New session initialization
+      if (req.method === 'POST') {
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (sessionId: string) => {
+            const userConfig = this.extractUserCredentials(req);
+            this.httpTransports.set(sessionId, { transport, userConfig });
+            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'shared'} credentials`);
+          },
+        });
+
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            console.error(`[MCP] Session ${transport.sessionId} closed`);
+            this.httpTransports.delete(transport.sessionId);
+          }
+        };
+
+        await this.server.connect(transport);
+        await transport.handleRequest(req as any, res as any, (req as any).body);
+        return;
+      }
+
+      // No valid session and not a POST request
+      res.status(400).json({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'Bad Request: No valid session ID provided. Initialize with POST request.'
+        },
+        id: null,
+      });
+    } catch (error) {
+      console.error('[MCP] Error in Streamable HTTP endpoint:', error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error' },
+          id: null,
+        });
+      }
+    }
+  }
+
   async run(): Promise<void> {
     try {
       const config = loadConfig();
@@ -126,14 +241,14 @@ class GitLabMCPServer {
       const useHttp = process.env.MCP_TRANSPORT === 'http';
       
       if (useHttp && port) {
-        // HTTP/SSE transport for LibreChat integration
+        // Streamable HTTP transport for LibreChat and modern MCP clients
         const app = express();
-        
+
         app.use(express.json());
         app.use((req, res, next) => {
           res.header('Access-Control-Allow-Origin', '*');
-          res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, x-session-id, mcp-session-id');
+          res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID');
           res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id');
           if (req.method === 'OPTIONS') {
             res.sendStatus(200);
@@ -142,150 +257,80 @@ class GitLabMCPServer {
           next();
         });
 
-        app.get('/sse', async (req, res) => {
-          try {
-            console.error('New SSE connection request');
-            
-            const sessionId = req.query.sessionId as string;
-            
-            if (sessionId && this.transports.has(sessionId)) {
-              console.error(`Session ${sessionId} already exists, closing connection`);
-              res.status(409).send('Session already exists');
-              return;
-            }
+        // Streamable HTTP endpoint at root (primary endpoint)
+        app.all('/', (req, res) => this.handleStreamableHTTP(req, res));
 
-            const transport = new SSEServerTransport('/message', res);
-            this.transports.set(transport.sessionId, transport);
+        // Alternative /mcp endpoint for container compatibility
+        app.all('/mcp', (req, res) => this.handleStreamableHTTP(req, res));
 
-            console.error(`Created new session: ${transport.sessionId}`);
-
-            transport.onclose = () => {
-              console.error(`Session ${transport.sessionId} closed`);
-              this.transports.delete(transport.sessionId);
-            };
-
-            await this.server.connect(transport);
-            console.error(`Server connected for session: ${transport.sessionId}`);
-
-          } catch (error) {
-            console.error('Error in SSE endpoint:', error);
-            if (!res.headersSent) {
-              res.status(500).send('Internal server error');
-            }
-          }
-        });
-
-        app.post('/message', async (req, res) => {
-          try {
-            const url = new URL(req.url || '', `http://localhost:${port}`);
-            const sessionId = url.searchParams.get('sessionId');
-            
-            if (!sessionId) {
-              res.status(400).send('Missing session ID');
-              return;
-            }
-
-            const transport = this.transports.get(sessionId);
-            if (!transport) {
-              res.status(404).send('Session not found');
-              return;
-            }
-
-            await transport.handleMessage(req.body);
+        // DELETE support for explicit session termination (per MCP spec)
+        app.delete('/', async (req, res) => {
+          const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
+          if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
+            const sessionData = this.httpTransports.get(sessionIdHeader)!;
+            await sessionData.transport.close();
+            this.httpTransports.delete(sessionIdHeader);
+            console.error(`[MCP] Session ${sessionIdHeader} terminated by client`);
             res.sendStatus(200);
-
-          } catch (error) {
-            console.error('Error in message endpoint:', error);
-            res.status(500).send('Internal server error');
-          }
-        });
-
-        // Streamable HTTP endpoint at root for modern MCP clients
-        app.all('/', async (req, res) => {
-          try {
-            // If session header provided, reuse existing transport
-            const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
-            if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
-              const transport = this.httpTransports.get(sessionIdHeader)!;
-              // Refresh default creds from headers on each request (per-session best effort)
-              const authHeader = (req.headers['authorization'] as string) || '';
-              const gitlabUrlHeader = (req.headers['x-gitlab-url'] as string) || undefined;
-              if (authHeader) {
-                const token = authHeader.startsWith('Bearer ')
-                  ? authHeader.slice('Bearer '.length).trim()
-                  : authHeader.trim();
-                if (token) {
-                  this.defaultUserConfigFromHeaders = { accessToken: token, gitlabUrl: gitlabUrlHeader };
-                }
-              }
-              await transport.handleRequest(req as any, res as any, (req as any).body);
-              return;
-            }
-
-            // Initialize a new session on first POST without session header
-            if (req.method === 'POST') {
-              const transport = new StreamableHTTPServerTransport({
-                sessionIdGenerator: () => randomUUID(),
-                onsessioninitialized: (sessionId: string) => {
-                  this.httpTransports.set(sessionId, transport);
-                },
-              });
-
-              // Capture Authorization header and optional X-GitLab-Url to use as default user credentials
-              const authHeader = (req.headers['authorization'] as string) || '';
-              const gitlabUrlHeader = (req.headers['x-gitlab-url'] as string) || undefined;
-              if (authHeader) {
-                const token = authHeader.startsWith('Bearer ')
-                  ? authHeader.slice('Bearer '.length).trim()
-                  : authHeader.trim();
-                if (token) {
-                  this.defaultUserConfigFromHeaders = { accessToken: token, gitlabUrl: gitlabUrlHeader };
-                }
-              }
-
-              transport.onclose = () => {
-                if (transport.sessionId) {
-                  this.httpTransports.delete(transport.sessionId);
-                }
-              };
-
-              await this.server.connect(transport);
-              await transport.handleRequest(req as any, res as any, (req as any).body);
-              return;
-            }
-
-            // If not POST and no valid session, it's a bad request
-            res.status(400).json({
+          } else {
+            res.status(404).json({
               jsonrpc: '2.0',
-              error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+              error: { code: -32001, message: 'Session not found' },
               id: null,
             });
-          } catch (error) {
-            console.error('Error in Streamable HTTP endpoint:', error);
-            if (!res.headersSent) {
-              res.status(500).json({
-                jsonrpc: '2.0',
-                error: { code: -32603, message: 'Internal server error' },
-                id: null,
-              });
-            }
           }
         });
 
+        app.delete('/mcp', async (req, res) => {
+          const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
+          if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
+            const sessionData = this.httpTransports.get(sessionIdHeader)!;
+            await sessionData.transport.close();
+            this.httpTransports.delete(sessionIdHeader);
+            console.error(`[MCP] Session ${sessionIdHeader} terminated by client`);
+            res.sendStatus(200);
+          } else {
+            res.status(404).json({
+              jsonrpc: '2.0',
+              error: { code: -32001, message: 'Session not found' },
+              id: null,
+            });
+          }
+        });
+
+        // Container-runtime compatibility: serve config schema
+        app.get('/.well-known/mcp-config', (req, res) => {
+          res.set('Content-Type', 'application/schema+json; charset=utf-8');
+          const baseSchema = zodToJsonSchema(configSchema, { target: 'jsonSchema7' });
+          const configJsonSchema = {
+            $schema: 'https://json-schema.org/draft/2020-12/schema',
+            $id: `${req.protocol}://${req.get('host')}/.well-known/mcp-config`,
+            title: 'MCP Session Configuration',
+            description: 'Schema for the /mcp endpoint configuration',
+            'x-mcp-version': '1.0',
+            'x-query-style': 'dot+bracket',
+            ...baseSchema,
+          } as any;
+          res.json(configJsonSchema);
+        });
+
+        // Health check endpoint
         app.get('/health', (req, res) => {
           res.json({
             status: 'healthy',
             timestamp: new Date().toISOString(),
-            activeSessions: this.transports.size
+            activeSessions: this.httpTransports.size,
+            transport: 'streamable-http',
+            protocol: '2025-03-26'
           });
         });
 
         app.listen(port, () => {
           console.error(`GitLab MCP Server running on HTTP port ${port}`);
-          console.error(`SSE endpoint: http://localhost:${port}/sse`);
-          console.error(`Message endpoint: http://localhost:${port}/message`);
-          console.error(`Streamable HTTP endpoint (root): http://localhost:${port}/`);
+          console.error(`Streamable HTTP endpoint: http://localhost:${port}/`);
+          console.error(`Alternative endpoint: http://localhost:${port}/mcp`);
           console.error(`Health check: http://localhost:${port}/health`);
+          console.error(`Transport: Streamable HTTP (MCP spec 2025-03-26)`);
         });
       } else {
         // Default to stdio transport
