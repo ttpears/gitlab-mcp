@@ -41,11 +41,15 @@ A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with aut
 
 ### Docker (Recommended for LibreChat)
 
+The Dockerfile automatically clones and builds the GitLab MCP server from this repository, so you don't need to copy any source files - just the Dockerfile itself.
+
 1. **Copy Dockerfile to your LibreChat directory:**
 ```bash
-# Copy and rename the Dockerfile for LibreChat integration
+# Copy the Dockerfile for LibreChat integration
 cp Dockerfile /path/to/librechat/Dockerfile.mcp-gitlab
 ```
+
+**Note:** The Dockerfile uses `git clone` to fetch the source code, so it won't accidentally copy LibreChat files. You can specify which version to build using the `GITLAB_MCP_VERSION` build arg (defaults to `main`).
 
 2. **Add GitLab environment variables to your LibreChat `.env` file:**
 ```bash

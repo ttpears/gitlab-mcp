@@ -33,6 +33,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mcp-gitlab
+      args:
+        # Specify version/tag to build (default: main)
+        # Use a specific version for production: GITLAB_MCP_VERSION=v1.1.0
+        GITLAB_MCP_VERSION: ${GITLAB_MCP_VERSION:-main}
     env_file:
       - .env
     environment:
