@@ -420,6 +420,29 @@ class GitLabMCPServer {
             });
 
             await this.server.connect(transport);
+
+            // Keep the SSE connection alive with periodic comments
+            // SSE connections need activity to prevent timeouts
+            const keepaliveInterval = setInterval(() => {
+              if (!res.socket || res.socket.destroyed) {
+                clearInterval(keepaliveInterval);
+                return;
+              }
+              // Send SSE comment to keep connection alive (won't be processed as data)
+              try {
+                res.write(': keepalive\n\n');
+              } catch (e) {
+                clearInterval(keepaliveInterval);
+              }
+            }, 15000); // Every 15 seconds
+
+            // Clean up interval when connection closes
+            res.on('close', () => {
+              clearInterval(keepaliveInterval);
+            });
+
+            // Don't end the response - SSE keeps it open
+            // The SDK's SSEServerTransport will manage the connection
           } catch (error) {
             console.error('[MCP] Error in SSE endpoint:', error);
             if (!res.headersSent) {
