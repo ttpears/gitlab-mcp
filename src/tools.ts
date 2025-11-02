@@ -8,6 +8,11 @@ export interface Tool {
   inputSchema: z.ZodSchema;
   requiresAuth: boolean;
   requiresWrite: boolean;
+  annotations?: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+  };
   handler: (input: any, client: GitLabGraphQLClient, userConfig?: UserConfig) => Promise<any>;
 }
 
@@ -45,6 +50,11 @@ const getCurrentUserTool: Tool = {
   description: 'Get information about the current authenticated GitLab user',
   requiresAuth: true,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({}).strict()),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -58,6 +68,11 @@ const getProjectTool: Tool = {
   description: 'Get detailed information about a specific GitLab project (read-only)',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     fullPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
   })),
@@ -73,6 +88,11 @@ const getProjectsTool: Tool = {
   description: 'List projects accessible to the user (requires authentication to see private projects)',
   requiresAuth: true,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
@@ -89,6 +109,11 @@ const getIssuesTool: Tool = {
   description: 'Get issues from a specific GitLab project (read-only)',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
@@ -109,6 +134,11 @@ const getMergeRequestsTool: Tool = {
   description: 'Get merge requests from a specific GitLab project (read-only)',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
@@ -130,6 +160,11 @@ const createIssueTool: Tool = {
   description: 'Create a new issue in a GitLab project (requires user authentication with write permissions)',
   requiresAuth: true,
   requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     title: z.string().min(1).describe('Title of the issue'),
@@ -154,6 +189,11 @@ const createMergeRequestTool: Tool = {
   description: 'Create a new merge request in a GitLab project (requires user authentication with write permissions)',
   requiresAuth: true,
   requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     title: z.string().min(1).describe('Title of the merge request'),
@@ -188,6 +228,11 @@ const executeCustomQueryTool: Tool = {
   description: 'Execute a custom GraphQL query against the GitLab API (authentication may be required depending on query)',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
   inputSchema: withUserAuth(z.object({
     query: z.string().describe('GraphQL query string'),
     variables: z.record(z.any()).optional().describe('Variables for the GraphQL query'),
@@ -207,6 +252,11 @@ const getAvailableQueriesTools: Tool = {
   description: 'Get list of available GraphQL queries and mutations from the GitLab schema',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({}).strict()),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -241,6 +291,11 @@ const updateIssueTool: Tool = {
   description: 'Update an issue (title, description, assignees, labels, due date) with schema-aware mutations',
   requiresAuth: true,
   requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     iid: z.string().describe('Issue IID (internal ID shown in the URL)'),
@@ -276,6 +331,11 @@ const updateMergeRequestTool: Tool = {
   description: 'Update a merge request (title, description, assignees, reviewers, labels) with schema-aware mutations',
   requiresAuth: true,
   requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     iid: z.string().describe('Merge Request IID (internal ID shown in the URL)'),
@@ -312,6 +372,11 @@ const resolvePathTool: Tool = {
   description: 'Resolve a GitLab path to either a project or group and list group projects when applicable',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     fullPath: z.string().min(1).describe('Project or group full path (e.g., "group/subgroup/project")'),
     first: z.number().min(1).max(100).default(20).describe('Number of items to retrieve when listing group projects'),
@@ -329,6 +394,11 @@ const getGroupProjectsTool: Tool = {
   description: 'List projects inside a GitLab group (optionally filter by search term)',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     fullPath: z.string().min(1).describe('Group full path (e.g., "group/subgroup")'),
     searchTerm: z.string().optional().transform(v => v?.trim() || undefined).describe('Optional search term to filter group projects'),
@@ -347,6 +417,11 @@ const getTypeFieldsTool: Tool = {
   description: 'List available fields on a GraphQL type using introspected schema (requires schema to be introspected)',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     typeName: z.string().min(1).describe('GraphQL type name (e.g., "Project")'),
   })),
@@ -363,6 +438,11 @@ const globalSearchTool: Tool = {
   description: 'Search across all of GitLab (projects, issues, merge requests) with a single query - ideal for LLM exploration',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term to find across GitLab (searches projects, issues, and merge requests)'),
   })),
@@ -384,6 +464,11 @@ const searchProjectsTool: Tool = {
   description: 'Search for GitLab projects by name or description - great for finding specific repositories',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string()
       .transform(val => val.trim())
@@ -404,6 +489,11 @@ const searchIssuesTool: Tool = {
   description: 'Search for issues across GitLab or within a specific project - perfect for finding bugs, features, or discussions',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term to find issues by title or description (leave empty to get recent issues)'),
     projectPath: z.string().optional().describe('Limit search to specific project (e.g., "group/project-name"). Leave empty to search globally.'),
@@ -414,14 +504,14 @@ const searchIssuesTool: Tool = {
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.searchIssues(
-      input.searchTerm, 
-      input.projectPath, 
-      input.state, 
-      input.first, 
-      input.after, 
+      input.searchTerm,
+      input.projectPath,
+      input.state,
+      input.first,
+      input.after,
       credentials
     );
-    
+
     // Return the issues from either project-specific or global search
     if (input.projectPath) {
       if (!result || !result.project || !result.project.issues) {
@@ -439,6 +529,11 @@ const searchMergeRequestsTool: Tool = {
   description: 'Search for merge requests across GitLab or within a specific project - ideal for finding code changes and reviews',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string()
       .transform(val => val.trim())
@@ -452,14 +547,14 @@ const searchMergeRequestsTool: Tool = {
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.searchMergeRequests(
-      input.searchTerm, 
-      input.projectPath, 
-      input.state, 
-      input.first, 
-      input.after, 
+      input.searchTerm,
+      input.projectPath,
+      input.state,
+      input.first,
+      input.after,
       credentials
     );
-    
+
     // Return the merge requests from either project-specific or global search
     if (input.projectPath) {
       if (!result || !result.project || !result.project.mergeRequests) {
@@ -477,6 +572,11 @@ const searchUsersTool: Tool = {
   description: 'Search for GitLab users by username or name - useful for finding team members or contributors',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string()
       .transform(val => val.trim())
@@ -496,6 +596,11 @@ const searchGroupsTool: Tool = {
   description: 'Search for GitLab groups and organizations - helpful for exploring team structures',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string()
       .transform(val => val.trim())
@@ -515,6 +620,11 @@ const browseRepositoryTool: Tool = {
   description: 'Browse repository files and folders - essential for exploring codebase structure',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     path: z.string().default('').describe('Directory path to browse (empty for root)'),
@@ -538,6 +648,11 @@ const getFileContentTool: Tool = {
   description: 'Get the content of a specific file from a GitLab repository - crucial for code analysis',
   requiresAuth: false,
   requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     filePath: z.string().describe('Path to the file within the repository (e.g., "src/main.js")'),
@@ -546,11 +661,11 @@ const getFileContentTool: Tool = {
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.getFileContent(input.projectPath, input.filePath, input.ref, credentials);
-    
+
     if (result.project.repository.blobs.nodes.length === 0) {
       throw new Error(`File not found: ${input.filePath} in ${input.projectPath} at ${input.ref}`);
     }
-    
+
     const file = result.project.repository.blobs.nodes[0];
     return {
       project: input.projectPath,

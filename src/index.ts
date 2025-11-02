@@ -13,6 +13,8 @@ import { z } from 'zod';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
   ErrorCode,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
@@ -40,11 +42,13 @@ class GitLabMCPServer {
       {
         capabilities: {
           tools: {},
+          prompts: {},
         },
       }
     );
 
     this.setupToolHandlers();
+    this.setupPromptHandlers();
     this.setupErrorHandling();
 
     // Initialize GitLab client using environment configuration
@@ -59,6 +63,7 @@ class GitLabMCPServer {
           name: tool.name,
           description: tool.description,
           inputSchema: zodToJsonSchema(tool.inputSchema, { target: 'jsonSchema7' }),
+          ...(tool.annotations && { annotations: tool.annotations }),
         })),
       };
     });
@@ -103,6 +108,117 @@ class GitLabMCPServer {
         }
         throw new McpError(ErrorCode.InternalError, 'Unknown error occurred');
       }
+    });
+  }
+
+  private setupPromptHandlers(): void {
+    // Define helpful prompts for common GitLab workflows
+    const prompts = [
+      {
+        name: 'explore-project',
+        description: 'Explore a GitLab project structure and recent activity',
+        arguments: [
+          {
+            name: 'projectPath',
+            description: 'Full path of the project (e.g., "group/project-name")',
+            required: true,
+          },
+        ],
+      },
+      {
+        name: 'find-my-work',
+        description: 'Find issues and merge requests assigned to you',
+        arguments: [],
+      },
+      {
+        name: 'review-merge-request',
+        description: 'Review a specific merge request with code changes',
+        arguments: [
+          {
+            name: 'projectPath',
+            description: 'Full path of the project (e.g., "group/project-name")',
+            required: true,
+          },
+          {
+            name: 'mrIid',
+            description: 'Merge request IID number',
+            required: true,
+          },
+        ],
+      },
+    ];
+
+    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+      return { prompts };
+    });
+
+    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+
+      if (name === 'explore-project') {
+        const projectPath = args?.projectPath as string;
+        return {
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: `Please explore the GitLab project "${projectPath}". Show me:
+1. Project overview and description
+2. Recent issues (last 10)
+3. Recent merge requests (last 10)
+4. Repository structure (browse the root directory)
+
+Provide direct links to all resources you find.`,
+              },
+            },
+          ],
+        };
+      }
+
+      if (name === 'find-my-work') {
+        return {
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: `Please find all issues and merge requests assigned to me. Search for:
+1. Open issues assigned to me
+2. Open merge requests where I'm assigned or a reviewer
+3. Recently closed items from the last week
+
+Provide direct links to each item and summarize the current state.`,
+              },
+            },
+          ],
+        };
+      }
+
+      if (name === 'review-merge-request') {
+        const projectPath = args?.projectPath as string;
+        const mrIid = args?.mrIid as string;
+        return {
+          messages: [
+            {
+              role: 'user',
+              content: {
+                type: 'text',
+                text: `Please review merge request !${mrIid} in project "${projectPath}". Show me:
+1. MR title, description, and status
+2. Source and target branches
+3. Changed files (browse the repository at both refs if needed)
+4. Related issues
+5. Review comments and approvals
+
+Provide the direct link to the MR and suggest any concerns or next steps.`,
+              },
+            },
+          ],
+        };
+      }
+
+      throw new McpError(ErrorCode.InvalidRequest, `Unknown prompt: ${name}`);
     });
   }
 
