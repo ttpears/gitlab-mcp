@@ -876,65 +876,67 @@ export class GitLabGraphQLClient {
         after 
       }, userConfig);
     } else {
-      const query = gql`
-        query searchMergeRequestsGlobal($search: String, $state: MergeRequestState, $first: Int!, $after: String) {
-          mergeRequests(search: $search, state: $state, first: $first, after: $after) {
-            pageInfo {
-              hasNextPage
-              hasPreviousPage
-              startCursor
-              endCursor
-            }
+      // GitLab doesn't support global MR search, so search in projects that match the search term
+      // This makes the tool more intuitive - find relevant projects first, then search their MRs
+      const projectsQuery = gql`
+        query findProjectsForMRSearch($search: String!, $first: Int!) {
+          projects(search: $search, first: $first) {
             nodes {
-              id
-              iid
-              title
-              description
-              state
-              webUrl
-              createdAt
-              updatedAt
-              mergedAt
-              sourceBranch
-              targetBranch
-              author {
-                id
-                username
-                name
-              }
-              project {
-                fullPath
-                name
-              }
-              assignees {
-                nodes {
-                  username
-                  name
-                }
-              }
-              reviewers {
-                nodes {
-                  username
-                  name
-                }
-              }
-              labels {
-                nodes {
-                  title
-                  color
-                  description
-                }
-              }
+              fullPath
+              name
             }
           }
         }
       `;
-      return this.query(query, { 
-        search: searchTerm, 
-        state: mappedState, 
-        first, 
-        after 
+
+      const projectsResult = await this.query(projectsQuery, {
+        search: searchTerm,
+        first: Math.min(5, first) // Search in top 5 matching projects
       }, userConfig);
+
+      if (!projectsResult?.projects?.nodes || projectsResult.projects.nodes.length === 0) {
+        return {
+          pageInfo: { hasNextPage: false, hasPreviousPage: false },
+          nodes: [],
+          _note: `No projects found matching "${searchTerm}". Try searching with a project name or providing projectPath.`
+        };
+      }
+
+      // Search MRs in each found project
+      const allMRs: any[] = [];
+      for (const project of projectsResult.projects.nodes) {
+        try {
+          const mrResult = await this.searchMergeRequests(
+            searchTerm,
+            project.fullPath,
+            state,
+            first,
+            after,
+            userConfig
+          );
+
+          if (mrResult?.project?.mergeRequests?.nodes) {
+            allMRs.push(...mrResult.project.mergeRequests.nodes);
+          }
+        } catch (e) {
+          // Skip projects where MR search fails (permissions, etc.)
+          continue;
+        }
+      }
+
+      // Sort by most recently updated and limit to requested count
+      const sortedMRs = allMRs
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+        .slice(0, first);
+
+      return {
+        pageInfo: {
+          hasNextPage: allMRs.length > first,
+          hasPreviousPage: false
+        },
+        nodes: sortedMRs,
+        _searchedProjects: projectsResult.projects.nodes.map((p: any) => p.fullPath)
+      };
     }
   }
 

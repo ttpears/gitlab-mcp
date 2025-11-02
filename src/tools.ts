@@ -526,7 +526,7 @@ const searchIssuesTool: Tool = {
 
 const searchMergeRequestsTool: Tool = {
   name: 'search_merge_requests',
-  description: 'Search for merge requests across GitLab or within a specific project - ideal for finding code changes and reviews',
+  description: 'Search for merge requests globally or within a specific project. If projectPath is not provided, automatically searches in projects matching the search term - ideal for finding code changes and reviews',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -539,13 +539,16 @@ const searchMergeRequestsTool: Tool = {
       .transform(val => val.trim())
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
       .describe('Search term to find merge requests by title or description'),
-    projectPath: z.string().optional().describe('Limit search to specific project (e.g., "group/project-name"). Leave empty to search globally.'),
+    projectPath: z.string().optional().describe('Optional: Limit search to specific project (e.g., "group/project-name"). If omitted, searches in projects matching the search term.'),
     state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+
+    // If projectPath provided, search in that project
+    // Otherwise, intelligently find projects matching search term and search their MRs
     const result = await client.searchMergeRequests(
       input.searchTerm,
       input.projectPath,
@@ -555,15 +558,16 @@ const searchMergeRequestsTool: Tool = {
       credentials
     );
 
-    // Return the merge requests from either project-specific or global search
+    // Handle project-specific search
     if (input.projectPath) {
       if (!result || !result.project || !result.project.mergeRequests) {
-        throw new Error('Project not found or merge requests are not accessible for the provided path');
+        throw new Error(`Project "${input.projectPath}" not found or merge requests are not accessible`);
       }
       return result.project.mergeRequests;
-    } else {
-      return result.mergeRequests;
     }
+
+    // Handle intelligent global search (projects found + MRs searched)
+    return result;
   },
 };
 
