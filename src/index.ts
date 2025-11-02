@@ -367,6 +367,26 @@ class GitLabMCPServer {
         // SSE transport endpoints for LibreChat compatibility
         app.get('/sse', async (req, res) => {
           try {
+            // Emergency cleanup if we have too many sessions
+            if (this.sseTransports.size > 10) {
+              console.error(`[MCP] WARNING: ${this.sseTransports.size} SSE sessions accumulated! Forcing cleanup...`);
+
+              // Close all sessions - LibreChat will reconnect properly
+              const oldSessions = Array.from(this.sseTransports.keys());
+              for (const sessionId of oldSessions) {
+                const transport = this.sseTransports.get(sessionId);
+                if (transport) {
+                  try {
+                    transport.close();
+                  } catch (e) {
+                    // Ignore errors during emergency cleanup
+                  }
+                  this.sseTransports.delete(sessionId);
+                }
+              }
+              console.error(`[MCP] Emergency cleanup complete. Cleared ${oldSessions.length} sessions.`);
+            }
+
             console.error('[MCP] New SSE connection request');
 
             const sessionId = (req.query.sessionId as string) || randomUUID();
@@ -377,15 +397,27 @@ class GitLabMCPServer {
               return;
             }
 
+            // Set aggressive timeouts to keep connection alive
+            req.socket.setTimeout(0); // Disable timeout
+            req.socket.setKeepAlive(true, 30000); // Send keepalive every 30s
+            res.socket?.setTimeout(0);
+            res.socket?.setKeepAlive(true, 30000);
+
             const transport = new SSEServerTransport('/message', res);
             this.sseTransports.set(transport.sessionId, transport);
 
             console.error(`[MCP] SSE session ${transport.sessionId} created (total SSE sessions: ${this.sseTransports.size})`);
 
             transport.onclose = () => {
-              console.error(`[MCP] SSE session ${transport.sessionId} closed`);
+              console.error(`[MCP] SSE session ${transport.sessionId} closed (reason: connection ended)`);
               this.sseTransports.delete(transport.sessionId);
             };
+
+            // Handle client disconnect
+            req.on('close', () => {
+              console.error(`[MCP] Client disconnected for session ${transport.sessionId}`);
+              this.sseTransports.delete(transport.sessionId);
+            });
 
             await this.server.connect(transport);
           } catch (error) {
