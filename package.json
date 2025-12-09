@@ -1,6 +1,6 @@
 {
   "name": "gitlab-mcp-server",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "description": "GitLab MCP Server with GraphQL discovery",
   "main": "dist/index.js",
   "module": "./src/index.ts",

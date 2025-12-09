@@ -876,25 +876,34 @@ export class GitLabGraphQLClient {
     } else {
       // GitLab GraphQL API does NOT support global MR search at root level
       // Best approach: Try user-based search for username queries
-      // For "author:username" or just "username", search that user's MRs
+      // Supports: "username", "author:username", "assignee:username"
 
-      // Extract username if format is "author:username" or "assignee:username"
+      // Detect search type and extract username
       let username = searchTerm;
+      let searchType: 'author' | 'assignee' = 'author'; // Default to author
+
       if (searchTerm.includes(':')) {
         const parts = searchTerm.split(':');
-        if (parts[0] === 'author' || parts[0] === 'assignee') {
+        if (parts[0] === 'author') {
+          searchType = 'author';
+          username = parts[1].trim();
+        } else if (parts[0] === 'assignee') {
+          searchType = 'assignee';
           username = parts[1].trim();
         }
       }
 
-      // Try to search user's authored MRs if search looks like a username
+      // Try user-based search if it looks like a username
       // Usernames are alphanumeric with hyphens/underscores, no spaces
       if (/^[a-zA-Z0-9_-]+$/.test(username)) {
         try {
+          // Use authoredMergeRequests or assignedMergeRequests based on search type
+          const fieldName = searchType === 'author' ? 'authoredMergeRequests' : 'assignedMergeRequests';
+
           const query = gql`
-            query searchUserMergeRequests($username: String!, $first: Int!, $after: String) {
+            query searchUserMergeRequests($username: String!, $first: Int!, $after: String, $state: MergeRequestState) {
               user(username: $username) {
-                authoredMergeRequests(first: $first, after: $after) {
+                ${fieldName}(first: $first, after: $after, state: $state) {
                   pageInfo {
                     hasNextPage
                     hasPreviousPage
@@ -945,13 +954,18 @@ export class GitLabGraphQLClient {
             }
           `;
 
-          const result = await this.query(query, { username, first, after }, userConfig);
+          const result = await this.query(query, {
+            username,
+            first,
+            after,
+            state: mappedState
+          }, userConfig);
 
-          if (result?.user?.authoredMergeRequests) {
-            return result.user.authoredMergeRequests;
+          if (result?.user?.[fieldName]) {
+            return result.user[fieldName];
           }
         } catch (e) {
-          // User not found or query failed, return helpful message
+          // User not found or query failed - fall through to error message
         }
       }
 
@@ -959,7 +973,7 @@ export class GitLabGraphQLClient {
       return {
         pageInfo: { hasNextPage: false, hasPreviousPage: false },
         nodes: [],
-        _note: `GitLab does not support global merge request searches. Please provide a projectPath, or search by username (e.g., "cdhanlon" or "author:cdhanlon").`
+        _note: `GitLab does not support global text searches for merge requests. Please either: (1) provide a projectPath for text search, or (2) search by username (e.g., "cdhanlon", "author:cdhanlon", "assignee:cdhanlon").`
       };
     }
   }
