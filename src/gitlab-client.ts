@@ -789,20 +789,37 @@ export class GitLabGraphQLClient {
         ? (allowed.find(v => v.toLowerCase() === state.toLowerCase()) || undefined)
         : undefined;
 
+      // OPTIMIZATION: Reduce query complexity for global searches to prevent timeouts
+      // According to GitLab best practices, avoid fetching deeply nested collections
+      // We keep description for AI context but limit nested collections (assignees/labels)
       const query = gql`
         query searchIssuesGlobal($search: String, $state: ${stateEnum}, $first: Int!, $after: String) {
           issues(search: $search, state: $state, first: $first, after: $after) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
-              id iid title description state webUrl createdAt updatedAt closedAt
-              author { id username name }
-              assignees { nodes { username name } }
-              labels { nodes { title color description } }
+              id
+              iid
+              title
+              description
+              state
+              webUrl
+              createdAt
+              updatedAt
+              closedAt
+              author { username name }
+              project { fullPath }
             }
           }
         }
       `;
-      return this.query(query, { search: searchTerm, state: mapped, first, after }, userConfig);
+      // Note: Global search returns streamlined fields (no assignees/labels) for performance.
+      // For full details including assignees and labels, search within a specific project.
+      return this.query(query, {
+        search: searchTerm,
+        state: mapped,
+        first, // Respect user's requested limit - no forced cap
+        after
+      }, userConfig);
     }
   }
 
@@ -878,6 +895,7 @@ export class GitLabGraphQLClient {
     } else {
       // GitLab doesn't support global MR search, so search in projects that match the search term
       // This makes the tool more intuitive - find relevant projects first, then search their MRs
+      // OPTIMIZATION: Use a single batched query with GraphQL aliases instead of N+1 loop
       const projectsQuery = gql`
         query findProjectsForMRSearch($search: String!, $first: Int!) {
           projects(search: $search, first: $first) {
@@ -891,7 +909,7 @@ export class GitLabGraphQLClient {
 
       const projectsResult = await this.query(projectsQuery, {
         search: searchTerm,
-        first: Math.min(5, first) // Search in top 5 matching projects
+        first: 10 // Get top 10 project matches for AI to choose from
       }, userConfig);
 
       if (!projectsResult?.projects?.nodes || projectsResult.projects.nodes.length === 0) {
@@ -902,25 +920,86 @@ export class GitLabGraphQLClient {
         };
       }
 
-      // Search MRs in each found project
-      const allMRs: any[] = [];
-      for (const project of projectsResult.projects.nodes) {
-        try {
-          const mrResult = await this.searchMergeRequests(
-            searchTerm,
-            project.fullPath,
-            state,
-            first,
-            after,
-            userConfig
-          );
+      // FIXED: Batch all project MR queries into a single GraphQL request using aliases
+      // This eliminates the N+1 problem and significantly improves performance
+      // Limit to 5 projects in the batched query to balance exploration with performance
+      const projects = projectsResult.projects.nodes.slice(0, 5);
 
-          if (mrResult?.project?.mergeRequests?.nodes) {
-            allMRs.push(...mrResult.project.mergeRequests.nodes);
+      // Build a single batched query with aliases for each project
+      // Use GraphQL variables to prevent injection attacks
+      const aliasedFields = projects.map((proj: any, idx: number) => {
+        const alias = `project${idx}`;
+        const pathVar = `$path${idx}`;
+        const searchVar = `$search${idx}`;
+        const stateVar = `$state${idx}`;
+        const firstVar = `$first${idx}`;
+        return {
+          alias,
+          field: `
+            ${alias}: project(fullPath: ${pathVar}) {
+              fullPath
+              mergeRequests(search: ${searchVar}, state: ${stateVar}, first: ${firstVar}) {
+                nodes {
+                  id
+                  iid
+                  title
+                  description
+                  state
+                  webUrl
+                  createdAt
+                  updatedAt
+                  mergedAt
+                  sourceBranch
+                  targetBranch
+                  author { id username name }
+                  assignees { nodes { username name } }
+                  reviewers { nodes { username name } }
+                  labels { nodes { title color } }
+                }
+              }
+            }
+          `,
+          variables: {
+            [pathVar.substring(1)]: proj.fullPath,
+            [searchVar.substring(1)]: searchTerm,
+            [stateVar.substring(1)]: mappedState,
+            [firstVar.substring(1)]: Math.ceil(first / projects.length)
           }
-        } catch (e) {
-          // Skip projects where MR search fails (permissions, etc.)
-          continue;
+        };
+      });
+
+      // Build variable declarations and merge all variables
+      const variableDeclarations = aliasedFields.map((f: any, idx: number) =>
+        `$path${idx}: ID!, $search${idx}: String, $state${idx}: MergeRequestState, $first${idx}: Int!`
+      ).join(', ');
+
+      const allVariables = aliasedFields.reduce((acc: any, f: any) => ({ ...acc, ...f.variables }), {});
+
+      const batchedQuery = `
+        query searchMRsInMultipleProjects(${variableDeclarations}) {
+          ${aliasedFields.map((f: any) => f.field).join('\n')}
+        }
+      `;
+
+      let batchedResult;
+      try {
+        batchedResult = await this.query(batchedQuery, allVariables, userConfig);
+      } catch (e) {
+        // If batched query fails, fall back to project path hint
+        return {
+          pageInfo: { hasNextPage: false, hasPreviousPage: false },
+          nodes: [],
+          _note: `Could not search merge requests. Try providing a specific projectPath parameter.`,
+          _error: String(e)
+        };
+      }
+
+      // Collect all MRs from the batched result
+      const allMRs: any[] = [];
+      for (let i = 0; i < projects.length; i++) {
+        const projectData = batchedResult[`project${i}`];
+        if (projectData?.mergeRequests?.nodes) {
+          allMRs.push(...projectData.mergeRequests.nodes);
         }
       }
 
@@ -935,7 +1014,8 @@ export class GitLabGraphQLClient {
           hasPreviousPage: false
         },
         nodes: sortedMRs,
-        _searchedProjects: projectsResult.projects.nodes.map((p: any) => p.fullPath)
+        _searchedProjects: projects.map((p: any) => p.fullPath),
+        _note: `Searched in top ${projects.length} matching projects. For exhaustive results or different projects, provide a specific projectPath.`
       };
     }
   }

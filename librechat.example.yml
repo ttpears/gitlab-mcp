@@ -66,6 +66,12 @@ mcpServers:
       - execute_custom_query: Run custom GraphQL ONLY when built-in tools are insufficient
         ⚠️ WARNING: Do NOT use this for common operations - use built-in tools instead!
         GitLab's GraphQL schema is complex and differs from REST API naming
+
+        CRITICAL GraphQL Type Rules:
+        - fullPath, id, iid: Use ID! type (not String!)
+        - Example: query($path: ID!) { project(fullPath: $path) { ... } }
+        - Common mistake: query($path: String!) ← WRONG, will fail
+
       - get_available_queries: Discover available GraphQL operations and schema
 
       AUTHENTICATION MODES:
