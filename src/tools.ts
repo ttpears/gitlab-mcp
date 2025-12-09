@@ -225,7 +225,7 @@ const createMergeRequestTool: Tool = {
 // Advanced tools
 const executeCustomQueryTool: Tool = {
   name: 'execute_custom_query',
-  description: 'Execute a custom GraphQL query against the GitLab API. WARNING: Complex queries can timeout. Use pagination (first: 20), limit nested fields, and avoid expensive operations like global searches without filters.',
+  description: 'Execute custom GraphQL query (use pagination and limit complexity to avoid timeouts)',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -234,7 +234,7 @@ const executeCustomQueryTool: Tool = {
     idempotentHint: false,
   },
   inputSchema: withUserAuth(z.object({
-    query: z.string().describe('GraphQL query string. Keep it simple: use pagination (first: 20), limit nested collections, and scope searches to specific projects when possible.'),
+    query: z.string().describe('GraphQL query string'),
     variables: z.record(z.any()).optional().describe('Variables for the GraphQL query'),
     requiresWrite: z.boolean().default(false).describe('Set to true if this is a mutation that requires write permissions'),
   })),
@@ -435,7 +435,7 @@ const getTypeFieldsTool: Tool = {
 // Search tools - comprehensive search capabilities for LLMs
 const globalSearchTool: Tool = {
   name: 'search_gitlab',
-  description: 'Search across ALL of GitLab in one query - returns projects, issues, AND merge requests simultaneously. Perfect for getting the big picture and discovering what exists. Use this for broad exploration before drilling into specifics.',
+  description: 'Search across all GitLab (projects, issues, merge requests) in one query - ideal for broad exploration',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -444,7 +444,7 @@ const globalSearchTool: Tool = {
     idempotentHint: true,
   },
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term to find across all of GitLab. Leave empty to see recent activity across projects, issues, and merge requests.'),
+    searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term (leave empty for recent activity)'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -461,7 +461,7 @@ const globalSearchTool: Tool = {
 
 const searchProjectsTool: Tool = {
   name: 'search_projects',
-  description: 'Search for GitLab projects by name or description - excellent for discovering repositories and understanding the organization structure. Use this to find projects before searching their issues/MRs.',
+  description: 'Search for GitLab projects by name or description',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -486,7 +486,7 @@ const searchProjectsTool: Tool = {
 
 const searchIssuesTool: Tool = {
   name: 'search_issues',
-  description: 'Search for issues across GitLab or within a specific project. Great for exploration and discovery. Provide projectPath for full details including assignees/labels, or omit for broad cross-project search.',
+  description: 'Search for issues globally or within a project (provide projectPath for full details with assignees/labels)',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -495,8 +495,8 @@ const searchIssuesTool: Tool = {
     idempotentHint: true,
   },
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term to find issues by title or description (leave empty to get recent issues)'),
-    projectPath: z.string().optional().describe('Optional: Project path (e.g., "group/project-name") to search within. Omit for global cross-project search to discover relevant projects.'),
+    searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term (leave empty for recent issues)'),
+    projectPath: z.string().optional().describe('Optional project path (e.g., "group/project"). Omit for global search.'),
     state: z.string().default('all').describe('Filter by issue state (opened, closed, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
@@ -526,7 +526,7 @@ const searchIssuesTool: Tool = {
 
 const searchMergeRequestsTool: Tool = {
   name: 'search_merge_requests',
-  description: 'Search for merge requests within a specific project or intelligently across matching projects. When projectPath is omitted, automatically finds relevant projects and searches their MRs - ideal for exploration and discovery.',
+  description: 'Search merge requests in a project or across matching projects (intelligently finds projects when projectPath omitted)',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -539,7 +539,7 @@ const searchMergeRequestsTool: Tool = {
       .transform(val => val.trim())
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
       .describe('Search term to find merge requests by title or description'),
-    projectPath: z.string().optional().describe('Optional: Project path (e.g., "group/project-name") to search within. Omit to intelligently search across top matching projects for broader discovery.'),
+    projectPath: z.string().optional().describe('Optional project path (e.g., "group/project"). Omit for cross-project search.'),
     state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
@@ -597,7 +597,7 @@ const searchUsersTool: Tool = {
 
 const searchGroupsTool: Tool = {
   name: 'search_groups',
-  description: 'Search for GitLab groups and organizations - essential for discovering team structures and understanding how projects are organized. Use this to explore the organizational hierarchy.',
+  description: 'Search for GitLab groups and organizations',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
