@@ -824,16 +824,17 @@ export class GitLabGraphQLClient {
   }
 
   async searchMergeRequests(
-    searchTerm: string, 
-    projectPath?: string, 
-    state?: string, 
-    first: number = 20, 
-    after?: string, 
+    searchTerm: string,
+    projectPath?: string,
+    state?: string,
+    first: number = 20,
+    after?: string,
     userConfig?: UserConfig
   ): Promise<any> {
     const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
 
     if (projectPath) {
+      // Project-scoped search with full details
       const query = gql`
         query searchMergeRequestsProject($projectPath: ID!, $search: String, $state: MergeRequestState, $first: Int!, $after: String) {
           project(fullPath: $projectPath) {
@@ -885,138 +886,74 @@ export class GitLabGraphQLClient {
           }
         }
       `;
-      return this.query(query, { 
-        projectPath, 
-        search: searchTerm, 
-        state: mappedState, 
-        first, 
-        after 
+      return this.query(query, {
+        projectPath,
+        search: searchTerm,
+        state: mappedState,
+        first,
+        after
       }, userConfig);
     } else {
-      // GitLab doesn't support global MR search, so search in projects that match the search term
-      // This makes the tool more intuitive - find relevant projects first, then search their MRs
-      // OPTIMIZATION: Use a single batched query with GraphQL aliases instead of N+1 loop
-      const projectsQuery = gql`
-        query findProjectsForMRSearch($search: String!, $first: Int!) {
-          projects(search: $search, first: $first) {
-            nodes {
-              fullPath
-              name
+      // Global search using root-level mergeRequests query (like globalSearch does)
+      // This properly handles author:username, assignee:username, and general text searches
+      const query = gql`
+        query searchMergeRequestsGlobal($search: String, $state: MergeRequestState, $first: Int!, $after: String) {
+          mergeRequests(search: $search, state: $state, first: $first, after: $after) {
+            pageInfo {
+              hasNextPage
+              hasPreviousPage
+              startCursor
+              endCursor
             }
-          }
-        }
-      `;
-
-      const projectsResult = await this.query(projectsQuery, {
-        search: searchTerm,
-        first: 10 // Get top 10 project matches for AI to choose from
-      }, userConfig);
-
-      if (!projectsResult?.projects?.nodes || projectsResult.projects.nodes.length === 0) {
-        return {
-          pageInfo: { hasNextPage: false, hasPreviousPage: false },
-          nodes: [],
-          _note: `No projects found matching "${searchTerm}". Try searching with a project name or providing projectPath.`
-        };
-      }
-
-      // FIXED: Batch all project MR queries into a single GraphQL request using aliases
-      // This eliminates the N+1 problem and significantly improves performance
-      // Limit to 5 projects in the batched query to balance exploration with performance
-      const projects = projectsResult.projects.nodes.slice(0, 5);
-
-      // Build a single batched query with aliases for each project
-      // Use GraphQL variables to prevent injection attacks
-      const aliasedFields = projects.map((proj: any, idx: number) => {
-        const alias = `project${idx}`;
-        const pathVar = `$path${idx}`;
-        const searchVar = `$search${idx}`;
-        const stateVar = `$state${idx}`;
-        const firstVar = `$first${idx}`;
-        return {
-          alias,
-          field: `
-            ${alias}: project(fullPath: ${pathVar}) {
-              fullPath
-              mergeRequests(search: ${searchVar}, state: ${stateVar}, first: ${firstVar}) {
+            nodes {
+              id
+              iid
+              title
+              description
+              state
+              webUrl
+              createdAt
+              updatedAt
+              mergedAt
+              sourceBranch
+              targetBranch
+              author {
+                id
+                username
+                name
+              }
+              assignees {
                 nodes {
-                  id
-                  iid
-                  title
-                  description
-                  state
-                  webUrl
-                  createdAt
-                  updatedAt
-                  mergedAt
-                  sourceBranch
-                  targetBranch
-                  author { id username name }
-                  assignees { nodes { username name } }
-                  reviewers { nodes { username name } }
-                  labels { nodes { title color } }
+                  username
+                  name
                 }
               }
+              reviewers {
+                nodes {
+                  username
+                  name
+                }
+              }
+              labels {
+                nodes {
+                  title
+                  color
+                }
+              }
+              project {
+                fullPath
+              }
             }
-          `,
-          variables: {
-            [pathVar.substring(1)]: proj.fullPath,
-            [searchVar.substring(1)]: searchTerm,
-            [stateVar.substring(1)]: mappedState,
-            [firstVar.substring(1)]: Math.ceil(first / projects.length)
           }
-        };
-      });
-
-      // Build variable declarations and merge all variables
-      const variableDeclarations = aliasedFields.map((f: any, idx: number) =>
-        `$path${idx}: ID!, $search${idx}: String, $state${idx}: MergeRequestState, $first${idx}: Int!`
-      ).join(', ');
-
-      const allVariables = aliasedFields.reduce((acc: any, f: any) => ({ ...acc, ...f.variables }), {});
-
-      const batchedQuery = `
-        query searchMRsInMultipleProjects(${variableDeclarations}) {
-          ${aliasedFields.map((f: any) => f.field).join('\n')}
         }
       `;
 
-      let batchedResult;
-      try {
-        batchedResult = await this.query(batchedQuery, allVariables, userConfig);
-      } catch (e) {
-        // If batched query fails, fall back to project path hint
-        return {
-          pageInfo: { hasNextPage: false, hasPreviousPage: false },
-          nodes: [],
-          _note: `Could not search merge requests. Try providing a specific projectPath parameter.`,
-          _error: String(e)
-        };
-      }
-
-      // Collect all MRs from the batched result
-      const allMRs: any[] = [];
-      for (let i = 0; i < projects.length; i++) {
-        const projectData = batchedResult[`project${i}`];
-        if (projectData?.mergeRequests?.nodes) {
-          allMRs.push(...projectData.mergeRequests.nodes);
-        }
-      }
-
-      // Sort by most recently updated and limit to requested count
-      const sortedMRs = allMRs
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-        .slice(0, first);
-
-      return {
-        pageInfo: {
-          hasNextPage: allMRs.length > first,
-          hasPreviousPage: false
-        },
-        nodes: sortedMRs,
-        _searchedProjects: projects.map((p: any) => p.fullPath),
-        _note: `Searched in top ${projects.length} matching projects. For exhaustive results or different projects, provide a specific projectPath.`
-      };
+      return this.query(query, {
+        search: searchTerm,
+        state: mappedState,
+        first,
+        after
+      }, userConfig);
     }
   }
 
