@@ -636,6 +636,8 @@ export class GitLabGraphQLClient {
 
   // Search methods
   async globalSearch(searchTerm?: string, scope?: string, userConfig?: UserConfig): Promise<any> {
+    // GitLab GraphQL API does NOT support root-level mergeRequests query
+    // Only projects and issues can be searched globally
     const query = gql`
       query globalSearch($search: String, $first: Int!) {
         projects(search: $search, first: $first) {
@@ -663,36 +665,14 @@ export class GitLabGraphQLClient {
               username
               name
             }
-            project {
-              fullPath
-            }
-          }
-        }
-        mergeRequests(search: $search, first: $first) {
-          nodes {
-            id
-            iid
-            title
-            description
-            state
-            webUrl
-            createdAt
-            updatedAt
-            author {
-              username
-              name
-            }
-            project {
-              fullPath
-            }
           }
         }
       }
     `;
-    
-    return this.query(query, { 
-      search: searchTerm || undefined, 
-      first: this.config.maxPageSize 
+
+    return this.query(query, {
+      search: searchTerm || undefined,
+      first: this.config.maxPageSize
     }, userConfig);
   }
 
@@ -894,66 +874,93 @@ export class GitLabGraphQLClient {
         after
       }, userConfig);
     } else {
-      // Global search using root-level mergeRequests query (like globalSearch does)
-      // This properly handles author:username, assignee:username, and general text searches
-      const query = gql`
-        query searchMergeRequestsGlobal($search: String, $state: MergeRequestState, $first: Int!, $after: String) {
-          mergeRequests(search: $search, state: $state, first: $first, after: $after) {
-            pageInfo {
-              hasNextPage
-              hasPreviousPage
-              startCursor
-              endCursor
-            }
-            nodes {
-              id
-              iid
-              title
-              description
-              state
-              webUrl
-              createdAt
-              updatedAt
-              mergedAt
-              sourceBranch
-              targetBranch
-              author {
-                id
-                username
-                name
-              }
-              assignees {
-                nodes {
-                  username
-                  name
-                }
-              }
-              reviewers {
-                nodes {
-                  username
-                  name
-                }
-              }
-              labels {
-                nodes {
-                  title
-                  color
-                }
-              }
-              project {
-                fullPath
-              }
-            }
-          }
-        }
-      `;
+      // GitLab GraphQL API does NOT support global MR search at root level
+      // Best approach: Try user-based search for username queries
+      // For "author:username" or just "username", search that user's MRs
 
-      return this.query(query, {
-        search: searchTerm,
-        state: mappedState,
-        first,
-        after
-      }, userConfig);
+      // Extract username if format is "author:username" or "assignee:username"
+      let username = searchTerm;
+      if (searchTerm.includes(':')) {
+        const parts = searchTerm.split(':');
+        if (parts[0] === 'author' || parts[0] === 'assignee') {
+          username = parts[1].trim();
+        }
+      }
+
+      // Try to search user's authored MRs if search looks like a username
+      // Usernames are alphanumeric with hyphens/underscores, no spaces
+      if (/^[a-zA-Z0-9_-]+$/.test(username)) {
+        try {
+          const query = gql`
+            query searchUserMergeRequests($username: String!, $first: Int!, $after: String) {
+              user(username: $username) {
+                authoredMergeRequests(first: $first, after: $after) {
+                  pageInfo {
+                    hasNextPage
+                    hasPreviousPage
+                    startCursor
+                    endCursor
+                  }
+                  nodes {
+                    id
+                    iid
+                    title
+                    description
+                    state
+                    webUrl
+                    createdAt
+                    updatedAt
+                    mergedAt
+                    sourceBranch
+                    targetBranch
+                    author {
+                      id
+                      username
+                      name
+                    }
+                    assignees {
+                      nodes {
+                        username
+                        name
+                      }
+                    }
+                    reviewers {
+                      nodes {
+                        username
+                        name
+                      }
+                    }
+                    labels {
+                      nodes {
+                        title
+                        color
+                      }
+                    }
+                    project {
+                      fullPath
+                    }
+                  }
+                }
+              }
+            }
+          `;
+
+          const result = await this.query(query, { username, first, after }, userConfig);
+
+          if (result?.user?.authoredMergeRequests) {
+            return result.user.authoredMergeRequests;
+          }
+        } catch (e) {
+          // User not found or query failed, return helpful message
+        }
+      }
+
+      // If not a username search or user query failed, return helpful error
+      return {
+        pageInfo: { hasNextPage: false, hasPreviousPage: false },
+        nodes: [],
+        _note: `GitLab does not support global merge request searches. Please provide a projectPath, or search by username (e.g., "cdhanlon" or "author:cdhanlon").`
+      };
     }
   }
 

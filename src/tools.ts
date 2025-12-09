@@ -435,7 +435,7 @@ const getTypeFieldsTool: Tool = {
 // Search tools - comprehensive search capabilities for LLMs
 const globalSearchTool: Tool = {
   name: 'search_gitlab',
-  description: 'Search across all GitLab (projects, issues, merge requests) in one query - ideal for broad exploration',
+  description: 'Search across GitLab projects and issues in one query (Note: MRs cannot be searched globally - use search_merge_requests with username)',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -453,8 +453,8 @@ const globalSearchTool: Tool = {
       searchTerm: input.searchTerm,
       projects: result.projects.nodes,
       issues: result.issues.nodes,
-      mergeRequests: result.mergeRequests.nodes,
-      totalResults: result.projects.nodes.length + result.issues.nodes.length + result.mergeRequests.nodes.length
+      totalResults: result.projects.nodes.length + result.issues.nodes.length,
+      _note: 'Merge requests cannot be searched globally. Use search_merge_requests with a username or projectPath.'
     };
   },
 };
@@ -526,7 +526,7 @@ const searchIssuesTool: Tool = {
 
 const searchMergeRequestsTool: Tool = {
   name: 'search_merge_requests',
-  description: 'Search merge requests globally or within a project - supports author:username and assignee:username filters',
+  description: 'Search merge requests by username (e.g., "cdhanlon") or within a project - no global text search available',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -538,8 +538,8 @@ const searchMergeRequestsTool: Tool = {
     searchTerm: z.string()
       .transform(val => val.trim())
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
-      .describe('Search term (supports author:username, assignee:username, or text search)'),
-    projectPath: z.string().optional().describe('Optional project path (e.g., "group/project"). Omit for global search.'),
+      .describe('Username (e.g., "cdhanlon", "author:username") or text when projectPath provided'),
+    projectPath: z.string().optional().describe('Project path (e.g., "group/project"). Required for text searches, optional for username searches.'),
     state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
