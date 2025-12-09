@@ -225,7 +225,7 @@ const createMergeRequestTool: Tool = {
 // Advanced tools
 const executeCustomQueryTool: Tool = {
   name: 'execute_custom_query',
-  description: 'Execute custom GraphQL query (use pagination and limit complexity to avoid timeouts)',
+  description: 'Execute custom GraphQL queries for complex filtering (e.g., issues with assigneeUsernames: ["user"], labelName: ["bug"]). Use this for structured filtering by assignee/author/labels when search tools return 0 results. Use pagination and limit complexity to avoid timeouts.',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -234,7 +234,7 @@ const executeCustomQueryTool: Tool = {
     idempotentHint: false,
   },
   inputSchema: withUserAuth(z.object({
-    query: z.string().describe('GraphQL query string'),
+    query: z.string().describe('GraphQL query string. Example: query { issues(assigneeUsernames: ["cdhanlon"], state: opened, first: 50) { nodes { iid title webUrl } } }'),
     variables: z.record(z.any()).optional().describe('Variables for the GraphQL query'),
     requiresWrite: z.boolean().default(false).describe('Set to true if this is a mutation that requires write permissions'),
   })),
@@ -435,7 +435,7 @@ const getTypeFieldsTool: Tool = {
 // Search tools - comprehensive search capabilities for LLMs
 const globalSearchTool: Tool = {
   name: 'search_gitlab',
-  description: 'Search across GitLab projects and issues in one query (Note: MRs cannot be searched globally - use search_merge_requests with username)',
+  description: 'Text search across GitLab projects and issues (Note: Does not support filtering by assignee/labels - use search_issues for that. MRs cannot be searched globally - use search_merge_requests with username)',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -454,7 +454,7 @@ const globalSearchTool: Tool = {
       projects: result.projects.nodes,
       issues: result.issues.nodes,
       totalResults: result.projects.nodes.length + result.issues.nodes.length,
-      _note: 'Merge requests cannot be searched globally. Use search_merge_requests with a username or projectPath.'
+      _note: 'This is a text search only. For filtering by assignee/author/labels, use search_issues or get_user_issues. For MRs, use search_merge_requests with username.'
     };
   },
 };
@@ -486,7 +486,7 @@ const searchProjectsTool: Tool = {
 
 const searchIssuesTool: Tool = {
   name: 'search_issues',
-  description: 'Search for issues globally or within a project (provide projectPath for full details with assignees/labels)',
+  description: 'Search for issues with text search and/or structured filtering (assignee, author, labels, state). For filtering by assignee/author/labels without text search, leave searchTerm empty.',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -495,9 +495,12 @@ const searchIssuesTool: Tool = {
     idempotentHint: true,
   },
   inputSchema: withUserAuth(z.object({
-    searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term (leave empty for recent issues)'),
+    searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Text search term (optional - leave empty to filter by assignee/author/labels only)'),
     projectPath: z.string().optional().describe('Optional project path (e.g., "group/project"). Omit for global search.'),
     state: z.string().default('all').describe('Filter by issue state (opened, closed, all)'),
+    assigneeUsernames: z.array(z.string()).optional().describe('Filter by assignee usernames (e.g., ["cdhanlon", "jsmith"])'),
+    authorUsername: z.string().optional().describe('Filter by author username (e.g., "cdhanlon")'),
+    labelNames: z.array(z.string()).optional().describe('Filter by label names (e.g., ["Priority::High", "bug"])'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
   })),
@@ -509,7 +512,10 @@ const searchIssuesTool: Tool = {
       input.state,
       input.first,
       input.after,
-      credentials
+      credentials,
+      input.assigneeUsernames,
+      input.authorUsername,
+      input.labelNames
     );
 
     // Return the issues from either project-specific or global search
@@ -519,14 +525,24 @@ const searchIssuesTool: Tool = {
       }
       return result.project.issues;
     } else {
-      return result.issues;
+      const issues = result.issues;
+
+      // If no results and filters were used, provide helpful error message
+      if (issues.nodes.length === 0 && (input.assigneeUsernames || input.authorUsername || input.labelNames)) {
+        return {
+          ...issues,
+          _note: 'No issues found with the specified filters. Try: (1) checking username/label spelling, (2) broadening filters, or (3) using execute_custom_query for complex filtering.'
+        };
+      }
+
+      return issues;
     }
   },
 };
 
 const searchMergeRequestsTool: Tool = {
   name: 'search_merge_requests',
-  description: 'Search merge requests by username (e.g., "cdhanlon") or within a project - no global text search available',
+  description: 'Search merge requests by username (supports "username", "author:username", "assignee:username") or search within a specific project. Note: GitLab does not support global text search for MRs - use projectPath for text searches.',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -538,7 +554,7 @@ const searchMergeRequestsTool: Tool = {
     searchTerm: z.string()
       .transform(val => val.trim())
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
-      .describe('Username (e.g., "cdhanlon", "author:username") or text when projectPath provided'),
+      .describe('Username (e.g., "cdhanlon", "author:username", "assignee:username") or text when projectPath provided'),
     projectPath: z.string().optional().describe('Project path (e.g., "group/project"). Required for text searches, optional for username searches.'),
     state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
@@ -566,7 +582,15 @@ const searchMergeRequestsTool: Tool = {
       return result.project.mergeRequests;
     }
 
-    // Handle intelligent global search (projects found + MRs searched)
+    // Handle intelligent global search (username-based)
+    // Provide helpful note if no results found
+    if (result.nodes && result.nodes.length === 0) {
+      return {
+        ...result,
+        _note: 'No merge requests found. For username searches, ensure the username is correct. For text searches, provide a projectPath.'
+      };
+    }
+
     return result;
   },
 };
@@ -684,11 +708,122 @@ const getFileContentTool: Tool = {
   },
 };
 
+// Helper functions for common user queries
+const getUserIssuesTool: Tool = {
+  name: 'get_user_issues',
+  description: 'Get all issues assigned to a specific user - uses proper GraphQL filtering for reliable results',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    username: z.string().describe('Username to find issues for (e.g., "cdhanlon")'),
+    state: z.string().default('opened').describe('Filter by issue state (opened, closed, all)'),
+    projectPath: z.string().optional().describe('Optional: limit search to a specific project'),
+    first: z.number().min(1).max(100).default(50).describe('Number of issues to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+
+    // Use the searchIssues method with assigneeUsernames filter
+    const result = await client.searchIssues(
+      undefined, // No text search
+      input.projectPath,
+      input.state,
+      input.first,
+      input.after,
+      credentials,
+      [input.username], // assigneeUsernames
+      undefined, // authorUsername
+      undefined  // labelNames
+    );
+
+    if (input.projectPath) {
+      if (!result || !result.project || !result.project.issues) {
+        throw new Error('Project not found or issues are not accessible for the provided path');
+      }
+      return {
+        username: input.username,
+        state: input.state,
+        projectPath: input.projectPath,
+        ...result.project.issues
+      };
+    } else {
+      return {
+        username: input.username,
+        state: input.state,
+        ...result.issues
+      };
+    }
+  },
+};
+
+const getUserMergeRequestsTool: Tool = {
+  name: 'get_user_merge_requests',
+  description: 'Get merge requests for a specific user (as author or assignee) - uses proper GraphQL filtering',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    username: z.string().describe('Username to find merge requests for (e.g., "cdhanlon")'),
+    role: z.enum(['author', 'assignee']).default('author').describe('Whether to find MRs authored by or assigned to the user'),
+    state: z.string().default('opened').describe('Filter by MR state (opened, closed, merged, all)'),
+    projectPath: z.string().optional().describe('Optional: limit search to a specific project'),
+    first: z.number().min(1).max(100).default(50).describe('Number of merge requests to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+
+    // Use the searchMergeRequests method with author: or assignee: prefix
+    const searchTerm = input.role === 'author' ? `author:${input.username}` : `assignee:${input.username}`;
+
+    const result = await client.searchMergeRequests(
+      searchTerm,
+      input.projectPath,
+      input.state,
+      input.first,
+      input.after,
+      credentials
+    );
+
+    if (input.projectPath) {
+      if (!result || !result.project || !result.project.mergeRequests) {
+        throw new Error(`Project "${input.projectPath}" not found or merge requests are not accessible`);
+      }
+      return {
+        username: input.username,
+        role: input.role,
+        state: input.state,
+        projectPath: input.projectPath,
+        ...result.project.mergeRequests
+      };
+    }
+
+    return {
+      username: input.username,
+      role: input.role,
+      state: input.state,
+      ...result
+    };
+  },
+};
+
 export const searchTools: Tool[] = [
   globalSearchTool,
   searchProjectsTool,
   searchIssuesTool,
   searchMergeRequestsTool,
+  getUserIssuesTool,
+  getUserMergeRequestsTool,
   searchUsersTool,
   searchGroupsTool,
   browseRepositoryTool,

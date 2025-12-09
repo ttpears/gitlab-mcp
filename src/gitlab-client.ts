@@ -721,12 +721,15 @@ export class GitLabGraphQLClient {
   }
 
   async searchIssues(
-    searchTerm: string, 
-    projectPath?: string, 
-    state?: string, 
-    first: number = 20, 
-    after?: string, 
-    userConfig?: UserConfig
+    searchTerm?: string,
+    projectPath?: string,
+    state?: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig,
+    assigneeUsernames?: string[],
+    authorUsername?: string,
+    labelNames?: string[]
   ): Promise<any> {
     await this.introspectSchema(userConfig);
     const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
@@ -743,9 +746,9 @@ export class GitLabGraphQLClient {
         : undefined;
 
       const query = gql`
-        query searchIssuesProject($projectPath: ID!, $search: String, $state: ${stateEnum}, $first: Int!, $after: String) {
+        query searchIssuesProject($projectPath: ID!, $search: String, $state: ${stateEnum}, $first: Int!, $after: String, $assigneeUsernames: [String!], $authorUsername: String, $labelName: [String!]) {
           project(fullPath: $projectPath) {
-            issues(search: $search, state: $state, first: $first, after: $after) {
+            issues(search: $search, state: $state, first: $first, after: $after, assigneeUsernames: $assigneeUsernames, authorUsername: $authorUsername, labelName: $labelName) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id iid title description state webUrl createdAt updatedAt closedAt
@@ -757,7 +760,16 @@ export class GitLabGraphQLClient {
           }
         }
       `;
-      return this.query(query, { projectPath, search: searchTerm, state: mapped, first, after }, userConfig);
+      return this.query(query, {
+        projectPath,
+        search: searchTerm,
+        state: mapped,
+        first,
+        after,
+        assigneeUsernames,
+        authorUsername,
+        labelName: labelNames
+      }, userConfig);
     } else {
       const queryType = this.schema.getQueryType();
       const qFields = queryType?.getFields?.() || {};
@@ -774,8 +786,8 @@ export class GitLabGraphQLClient {
       // We keep description for AI context but limit nested collections (assignees/labels)
       // Note: Global Issue type doesn't have 'project' field - only project-scoped queries do
       const query = gql`
-        query searchIssuesGlobal($search: String, $state: ${stateEnum}, $first: Int!, $after: String) {
-          issues(search: $search, state: $state, first: $first, after: $after) {
+        query searchIssuesGlobal($search: String, $state: ${stateEnum}, $first: Int!, $after: String, $assigneeUsernames: [String!], $authorUsername: String, $labelName: [String!]) {
+          issues(search: $search, state: $state, first: $first, after: $after, assigneeUsernames: $assigneeUsernames, authorUsername: $authorUsername, labelName: $labelName) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
@@ -798,7 +810,10 @@ export class GitLabGraphQLClient {
         search: searchTerm,
         state: mapped,
         first, // Respect user's requested limit - no forced cap
-        after
+        after,
+        assigneeUsernames,
+        authorUsername,
+        labelName: labelNames
       }, userConfig);
     }
   }
