@@ -526,7 +526,7 @@ const searchIssuesTool: Tool = {
 
 const searchMergeRequestsTool: Tool = {
   name: 'search_merge_requests',
-  description: 'Search merge requests in a project or across matching projects (intelligently finds projects when projectPath omitted)',
+  description: 'Search merge requests globally or within a project - supports author:username and assignee:username filters',
   requiresAuth: false,
   requiresWrite: false,
   annotations: {
@@ -538,8 +538,8 @@ const searchMergeRequestsTool: Tool = {
     searchTerm: z.string()
       .transform(val => val.trim())
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
-      .describe('Search term to find merge requests by title or description'),
-    projectPath: z.string().optional().describe('Optional project path (e.g., "group/project"). Omit for cross-project search.'),
+      .describe('Search term (supports author:username, assignee:username, or text search)'),
+    projectPath: z.string().optional().describe('Optional project path (e.g., "group/project"). Omit for global search.'),
     state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
