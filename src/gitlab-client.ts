@@ -792,6 +792,7 @@ export class GitLabGraphQLClient {
       // OPTIMIZATION: Reduce query complexity for global searches to prevent timeouts
       // According to GitLab best practices, avoid fetching deeply nested collections
       // We keep description for AI context but limit nested collections (assignees/labels)
+      // Note: Global Issue type doesn't have 'project' field - only project-scoped queries do
       const query = gql`
         query searchIssuesGlobal($search: String, $state: ${stateEnum}, $first: Int!, $after: String) {
           issues(search: $search, state: $state, first: $first, after: $after) {
@@ -807,13 +808,12 @@ export class GitLabGraphQLClient {
               updatedAt
               closedAt
               author { username name }
-              project { fullPath }
             }
           }
         }
       `;
-      // Note: Global search returns streamlined fields (no assignees/labels) for performance.
-      // For full details including assignees and labels, search within a specific project.
+      // Note: Global search returns streamlined fields (no assignees/labels/project) for performance.
+      // For full details and project attribution, search within a specific project using projectPath.
       return this.query(query, {
         search: searchTerm,
         state: mapped,
