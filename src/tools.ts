@@ -661,12 +661,24 @@ const browseRepositoryTool: Tool = {
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.searchRepositoryFiles(input.projectPath, input.path, input.ref, credentials);
+    const projectWebUrl = result.project.webUrl;
+    const refParam = input.ref || 'HEAD';
+    
+    const files = result.project.repository.tree.blobs.nodes.map((f: any) => ({
+      ...f,
+      webUrl: `${projectWebUrl}/-/blob/${refParam}/${f.path}`
+    }));
+    const directories = result.project.repository.tree.trees.nodes.map((d: any) => ({
+      ...d,
+      webUrl: `${projectWebUrl}/-/tree/${refParam}/${d.path}`
+    }));
+    
     return {
       project: input.projectPath,
       path: input.path,
-      ref: input.ref,
-      files: result.project.repository.tree.blobs.nodes,
-      directories: result.project.repository.tree.trees.nodes
+      ref: refParam,
+      files,
+      directories
     };
   },
 };
@@ -695,14 +707,18 @@ const getFileContentTool: Tool = {
     }
 
     const file = result.project.repository.blobs.nodes[0];
+    const projectWebUrl = result.project.webUrl;
+    const refParam = input.ref || 'HEAD';
+    const fileWebUrl = `${projectWebUrl}/-/blob/${refParam}/${file.path}`;
+    
     return {
       project: input.projectPath,
       path: file.path,
       name: file.name,
       size: file.size,
       content: file.rawBlob,
-      webUrl: file.webUrl,
-      ref: input.ref,
+      webUrl: fileWebUrl,
+      ref: refParam,
       isLFS: !!file.lfsOid
     };
   },

@@ -318,7 +318,6 @@ export class GitLabGraphQLClient {
           id
           username
           name
-          email
           avatarUrl
           webUrl
         }
@@ -345,10 +344,7 @@ export class GitLabGraphQLClient {
                 sha
                 message
                 authoredDate
-                author {
-                  name
-                  email
-                }
+                authorName
               }
             }
           }
@@ -362,28 +358,19 @@ export class GitLabGraphQLClient {
     const query = gql`
       query getProjects($first: Int!, $after: String) {
         projects(first: $first, after: $after) {
-            pageInfo {
-              hasNextPage
-              hasPreviousPage
-              startCursor
-              endCursor
-            }
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
               name
-              description
               fullPath
               webUrl
               visibility
-              createdAt
-              updatedAt
-              issuesEnabled
-              mergeRequestsEnabled
+              lastActivityAt
             }
           }
       }
     `;
-    return this.query(query, { first, after }, userConfig);
+    return this.query(query, { first: Math.min(first, 50), after }, userConfig);
   }
 
   async getIssues(projectPath: string, first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
@@ -893,10 +880,15 @@ export class GitLabGraphQLClient {
             issues(search: $search, state: $state, first: $first, after: $after, assigneeUsernames: $assigneeUsernames, authorUsername: $authorUsername, labelName: $labelName) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
-                id iid title description state webUrl createdAt updatedAt closedAt
-                author { id username name }
-                assignees { nodes { username name } }
-                labels { nodes { title color description } }
+                id
+                iid
+                title
+                state
+                webUrl
+                createdAt
+                updatedAt
+                author { username name }
+                labels { nodes { title } }
               }
             }
           }
@@ -1084,6 +1076,7 @@ export class GitLabGraphQLClient {
     const query = gql`
       query searchRepositoryFiles($projectPath: ID!, $path: String, $ref: String) {
         project(fullPath: $projectPath) {
+          webUrl
           repository {
             tree(path: $path, ref: $ref, recursive: true) {
               blobs {
@@ -1092,7 +1085,6 @@ export class GitLabGraphQLClient {
                   path
                   type
                   mode
-                  webUrl
                 }
               }
               trees {
@@ -1100,7 +1092,6 @@ export class GitLabGraphQLClient {
                   name
                   path
                   type
-                  webUrl
                 }
               }
             }
@@ -1109,7 +1100,6 @@ export class GitLabGraphQLClient {
       }
     `;
     
-    // Note: This searches file names. For content search, we'd need to use the search API
     return this.query(query, { 
       projectPath, 
       path: path || "", 
@@ -1192,6 +1182,7 @@ export class GitLabGraphQLClient {
     const query = gql`
       query getFileContent($projectPath: ID!, $path: String!, $ref: String) {
         project(fullPath: $projectPath) {
+          webUrl
           repository {
             blobs(paths: [$path], ref: $ref) {
               nodes {
@@ -1199,7 +1190,6 @@ export class GitLabGraphQLClient {
                 path
                 rawBlob
                 size
-                webUrl
                 lfsOid
               }
             }
@@ -1223,18 +1213,15 @@ export class GitLabGraphQLClient {
             id
             username
             name
-            email
             avatarUrl
             webUrl
-            publicEmail
-            location
-            bio
+            state
           }
         }
       }
     `;
     
-    return this.query(query, { search: searchTerm, first }, userConfig);
+    return this.query(query, { search: searchTerm, first: Math.min(first, 50) }, userConfig);
   }
 
   async searchGroups(searchTerm: string, first: number = 20, userConfig?: UserConfig): Promise<any> {
@@ -1249,13 +1236,11 @@ export class GitLabGraphQLClient {
             description
             webUrl
             visibility
-            avatarUrl
-            createdAt
           }
         }
       }
     `;
     
-    return this.query(query, { search: searchTerm, first }, userConfig);
+    return this.query(query, { search: searchTerm, first: Math.min(first, 50) }, userConfig);
   }
 }
