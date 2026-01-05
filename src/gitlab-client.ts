@@ -1,6 +1,58 @@
-import { GraphQLClient, gql } from 'graphql-request';
+import { GraphQLClient, gql, ClientError } from 'graphql-request';
 import { buildClientSchema, getIntrospectionQuery, IntrospectionQuery } from 'graphql';
 import type { Config, UserConfig } from './config.js';
+
+// GitLab-specific error types for better handling
+export interface GitLabGraphQLError {
+  message: string;
+  locations?: Array<{ line: number; column: number }>;
+  path?: string[];
+  extensions?: {
+    code?: string;
+    spam?: boolean;
+    needsCaptchaResponse?: boolean;
+    problems?: Array<{ path: string[]; explanation: string }>;
+  };
+}
+
+export class GitLabAPIError extends Error {
+  public readonly code: string;
+  public readonly statusCode?: number;
+  public readonly isRetryable: boolean;
+  public readonly isRateLimited: boolean;
+  public readonly retryAfter?: number;
+  public readonly originalError?: Error;
+
+  constructor(
+    message: string,
+    options: {
+      code?: string;
+      statusCode?: number;
+      isRetryable?: boolean;
+      isRateLimited?: boolean;
+      retryAfter?: number;
+      originalError?: Error;
+    } = {}
+  ) {
+    super(message);
+    this.name = 'GitLabAPIError';
+    this.code = options.code || 'UNKNOWN_ERROR';
+    this.statusCode = options.statusCode;
+    this.isRetryable = options.isRetryable ?? false;
+    this.isRateLimited = options.isRateLimited ?? false;
+    this.retryAfter = options.retryAfter;
+    this.originalError = options.originalError;
+  }
+}
+
+// Retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 10000,
+  retryableStatusCodes: [408, 429, 500, 502, 503, 504],
+  retryableErrorCodes: ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EAI_AGAIN'],
+};
 
 export class GitLabGraphQLClient {
   private baseClient: GraphQLClient | null = null;
@@ -19,13 +71,184 @@ export class GitLabGraphQLClient {
 
   private createClient(gitlabUrl: string, accessToken: string): GraphQLClient {
     const endpoint = `${gitlabUrl.replace(/\/$/, '')}/api/graphql`;
+    const timeoutMs = this.config.defaultTimeout || 30000;
     
     return new GraphQLClient(endpoint, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
+      // Configure fetch with timeout using AbortController
+      fetch: (url, options) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        
+        return fetch(url, {
+          ...options,
+          signal: controller.signal,
+        }).finally(() => clearTimeout(timeoutId));
+      },
     });
+  }
+
+  /**
+   * Parse GraphQL/HTTP errors into structured GitLabAPIError
+   */
+  private parseError(error: unknown): GitLabAPIError {
+    // Handle ClientError from graphql-request (contains response details)
+    if (error instanceof ClientError) {
+      const response = error.response;
+      const statusCode = response.status;
+      const errors = response.errors as GitLabGraphQLError[] | undefined;
+      
+      if (statusCode === 429) {
+        const headers = response.headers as Record<string, string> | undefined;
+        const retryAfterHeader = headers?.['retry-after'] || '60';
+        const retryAfter = parseInt(retryAfterHeader, 10);
+        return new GitLabAPIError(
+          `Rate limited by GitLab. Retry after ${retryAfter}s`,
+          { code: 'RATE_LIMITED', statusCode, isRetryable: true, isRateLimited: true, retryAfter, originalError: error }
+        );
+      }
+
+      // Check for authentication errors (401)
+      if (statusCode === 401) {
+        const message = errors?.[0]?.message || 'Invalid or expired token';
+        return new GitLabAPIError(
+          `Authentication failed: ${message}. Ensure your token has 'read_api' or 'api' scope.`,
+          { code: 'AUTH_FAILED', statusCode, isRetryable: false, originalError: error }
+        );
+      }
+
+      // Check for forbidden (403) - often scope issues
+      if (statusCode === 403) {
+        return new GitLabAPIError(
+          'Access forbidden. Your token may lack required scopes (need read_api for queries, api for mutations).',
+          { code: 'FORBIDDEN', statusCode, isRetryable: false, originalError: error }
+        );
+      }
+
+      // Check for query complexity errors
+      const complexityError = errors?.find(e => 
+        e.message?.includes('complexity') || e.message?.includes('Query has complexity')
+      );
+      if (complexityError) {
+        return new GitLabAPIError(
+          `Query too complex: ${complexityError.message}. Try reducing the number of fields or pagination size.`,
+          { code: 'COMPLEXITY_EXCEEDED', statusCode, isRetryable: false, originalError: error }
+        );
+      }
+
+      // Check for timeout errors
+      if (errors?.some(e => e.message?.includes('timeout') || e.message?.includes('Timeout'))) {
+        return new GitLabAPIError(
+          'Query timed out. Try reducing pagination size or query complexity.',
+          { code: 'TIMEOUT', statusCode, isRetryable: true, originalError: error }
+        );
+      }
+
+      // Check for server errors (5xx) - retryable
+      if (statusCode >= 500) {
+        return new GitLabAPIError(
+          `GitLab server error (${statusCode}): ${errors?.[0]?.message || 'Internal server error'}`,
+          { code: 'SERVER_ERROR', statusCode, isRetryable: true, originalError: error }
+        );
+      }
+
+      // Generic GraphQL errors
+      if (errors?.length) {
+        const messages = errors.map(e => e.message).join('; ');
+        return new GitLabAPIError(
+          `GraphQL error: ${messages}`,
+          { code: 'GRAPHQL_ERROR', statusCode, isRetryable: false, originalError: error }
+        );
+      }
+
+      return new GitLabAPIError(
+        `HTTP ${statusCode}: ${error.message}`,
+        { code: 'HTTP_ERROR', statusCode, isRetryable: RETRY_CONFIG.retryableStatusCodes.includes(statusCode), originalError: error }
+      );
+    }
+
+    // Handle abort/timeout errors
+    if (error instanceof Error) {
+      if (error.name === 'AbortError') {
+        return new GitLabAPIError(
+          'Request timed out. GitLab has a 30s server limit; try reducing query complexity.',
+          { code: 'TIMEOUT', isRetryable: true, originalError: error }
+        );
+      }
+
+      // Network errors
+      const errorCode = (error as any).code;
+      if (errorCode && RETRY_CONFIG.retryableErrorCodes.includes(errorCode)) {
+        return new GitLabAPIError(
+          `Network error: ${error.message}`,
+          { code: errorCode, isRetryable: true, originalError: error }
+        );
+      }
+
+      return new GitLabAPIError(
+        error.message,
+        { code: 'UNKNOWN_ERROR', isRetryable: false, originalError: error }
+      );
+    }
+
+    return new GitLabAPIError(
+      String(error),
+      { code: 'UNKNOWN_ERROR', isRetryable: false }
+    );
+  }
+
+  /**
+   * Execute request with exponential backoff retry
+   */
+  private async executeWithRetry<T>(
+    fn: () => Promise<T>,
+    context: string = 'GraphQL query'
+  ): Promise<T> {
+    let lastError: GitLabAPIError | undefined;
+
+    for (let attempt = 0; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = this.parseError(error);
+
+        // Don't retry non-retryable errors
+        if (!lastError.isRetryable) {
+          throw lastError;
+        }
+
+        // Don't retry if we've exhausted attempts
+        if (attempt >= RETRY_CONFIG.maxRetries) {
+          throw new GitLabAPIError(
+            `${context} failed after ${RETRY_CONFIG.maxRetries + 1} attempts: ${lastError.message}`,
+            { ...lastError, code: 'MAX_RETRIES_EXCEEDED' }
+          );
+        }
+
+        // Calculate delay with exponential backoff and jitter
+        let delay: number;
+        if (lastError.isRateLimited && lastError.retryAfter) {
+          delay = lastError.retryAfter * 1000;
+        } else {
+          delay = Math.min(
+            RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt) + Math.random() * 1000,
+            RETRY_CONFIG.maxDelayMs
+          );
+        }
+
+        console.error(
+          `[GitLab] ${context} failed (attempt ${attempt + 1}/${RETRY_CONFIG.maxRetries + 1}): ${lastError.code}. Retrying in ${Math.round(delay / 1000)}s...`
+        );
+
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    // TypeScript: should never reach here, but just in case
+    throw lastError || new GitLabAPIError('Unknown error during retry');
   }
 
   private getUserClient(userConfig: UserConfig): GraphQLClient {
@@ -81,12 +304,11 @@ export class GitLabGraphQLClient {
   }
 
   async query<T = any>(query: string, variables?: any, userConfig?: UserConfig, requiresWrite = false): Promise<T> {
-    try {
-      const client = this.getClient(userConfig, requiresWrite);
-      return await client.request<T>(query, variables);
-    } catch (error) {
-      throw new Error(`GraphQL query failed: ${error}`);
-    }
+    const client = this.getClient(userConfig, requiresWrite);
+    return this.executeWithRetry(
+      () => client.request<T>(query, variables),
+      'GraphQL query'
+    );
   }
 
   async getCurrentUser(userConfig?: UserConfig): Promise<any> {
@@ -169,48 +391,22 @@ export class GitLabGraphQLClient {
       query getIssues($projectPath: ID!, $first: Int!, $after: String) {
         project(fullPath: $projectPath) {
           issues(first: $first, after: $after) {
-            pageInfo {
-              hasNextPage
-              hasPreviousPage
-              startCursor
-              endCursor
-            }
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
               iid
               title
-              description
               state
               createdAt
               updatedAt
-              closedAt
               webUrl
-              author {
-                id
-                username
-                name
-              }
-              assignees {
-                nodes {
-                  id
-                  username
-                  name
-                }
-              }
-              labels {
-                nodes {
-                  id
-                  title
-                  color
-                  description
-                }
-              }
+              author { username name }
             }
           }
         }
       }
     `;
-    return this.query(query, { projectPath, first, after }, userConfig);
+    return this.query(query, { projectPath, first: Math.min(first, 50), after }, userConfig);
   }
 
   async getMergeRequests(projectPath: string, first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
@@ -218,17 +414,11 @@ export class GitLabGraphQLClient {
       query getMergeRequests($projectPath: ID!, $first: Int!, $after: String) {
         project(fullPath: $projectPath) {
           mergeRequests(first: $first, after: $after) {
-            pageInfo {
-              hasNextPage
-              hasPreviousPage
-              startCursor
-              endCursor
-            }
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
               iid
               title
-              description
               state
               createdAt
               updatedAt
@@ -236,39 +426,13 @@ export class GitLabGraphQLClient {
               webUrl
               sourceBranch
               targetBranch
-              author {
-                id
-                username
-                name
-              }
-              assignees {
-                nodes {
-                  id
-                  username
-                  name
-                }
-              }
-              reviewers {
-                nodes {
-                  id
-                  username
-                  name
-                }
-              }
-              labels {
-                nodes {
-                  id
-                  title
-                  color
-                  description
-                }
-              }
+              author { username name }
             }
           }
         }
       }
     `;
-    return this.query(query, { projectPath, first, after }, userConfig);
+    return this.query(query, { projectPath, first: Math.min(first, 50), after }, userConfig);
   }
 
   async createIssue(projectPath: string, title: string, description?: string, userConfig?: UserConfig): Promise<any> {
@@ -634,10 +798,7 @@ export class GitLabGraphQLClient {
     return Object.keys(fields);
   }
 
-  // Search methods
   async globalSearch(searchTerm?: string, scope?: string, userConfig?: UserConfig): Promise<any> {
-    // GitLab GraphQL API does NOT support root-level mergeRequests query
-    // Only projects and issues can be searched globally
     const query = gql`
       query globalSearch($search: String, $first: Int!) {
         projects(search: $search, first: $first) {
@@ -645,10 +806,8 @@ export class GitLabGraphQLClient {
             id
             name
             fullPath
-            description
             webUrl
             visibility
-            lastActivityAt
           }
         }
         issues(search: $search, first: $first) {
@@ -656,15 +815,9 @@ export class GitLabGraphQLClient {
             id
             iid
             title
-            description
             state
             webUrl
             createdAt
-            updatedAt
-            author {
-              username
-              name
-            }
           }
         }
       }
@@ -672,7 +825,7 @@ export class GitLabGraphQLClient {
 
     return this.query(query, {
       search: searchTerm || undefined,
-      first: this.config.maxPageSize
+      first: Math.min(this.config.maxPageSize, 25)
     }, userConfig);
   }
 
@@ -680,12 +833,7 @@ export class GitLabGraphQLClient {
     const query = gql`
       query searchProjects($search: String!, $first: Int!, $after: String) {
         projects(search: $search, first: $first, after: $after) {
-          pageInfo {
-            hasNextPage
-            hasPreviousPage
-            startCursor
-            endCursor
-          }
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
           nodes {
             id
             name
@@ -693,19 +841,13 @@ export class GitLabGraphQLClient {
             description
             webUrl
             visibility
-            createdAt
-            updatedAt
             lastActivityAt
-            issuesEnabled
-            mergeRequestsEnabled
-            starCount
-            forksCount
           }
         }
       }
     `;
     
-    return this.query(query, { search: searchTerm, first, after }, userConfig);
+    return this.query(query, { search: searchTerm, first: Math.min(first, 50), after }, userConfig);
   }
 
   private getTypeName(t: any): string | undefined {
@@ -829,22 +971,15 @@ export class GitLabGraphQLClient {
     const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
 
     if (projectPath) {
-      // Project-scoped search with full details
       const query = gql`
         query searchMergeRequestsProject($projectPath: ID!, $search: String, $state: MergeRequestState, $first: Int!, $after: String) {
           project(fullPath: $projectPath) {
             mergeRequests(search: $search, state: $state, first: $first, after: $after) {
-              pageInfo {
-                hasNextPage
-                hasPreviousPage
-                startCursor
-                endCursor
-              }
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id
                 iid
                 title
-                description
                 state
                 webUrl
                 createdAt
@@ -852,30 +987,7 @@ export class GitLabGraphQLClient {
                 mergedAt
                 sourceBranch
                 targetBranch
-                author {
-                  id
-                  username
-                  name
-                }
-                assignees {
-                  nodes {
-                    username
-                    name
-                  }
-                }
-                reviewers {
-                  nodes {
-                    username
-                    name
-                  }
-                }
-                labels {
-                  nodes {
-                    title
-                    color
-                    description
-                  }
-                }
+                author { username name }
               }
             }
           }
@@ -885,7 +997,7 @@ export class GitLabGraphQLClient {
         projectPath,
         search: searchTerm,
         state: mappedState,
-        first,
+        first: Math.min(first, 50),
         after
       }, userConfig);
     } else {
@@ -908,70 +1020,38 @@ export class GitLabGraphQLClient {
         }
       }
 
-      // Try user-based search if it looks like a username
-      // Usernames are alphanumeric with hyphens/underscores, no spaces
-      if (/^[a-zA-Z0-9_-]+$/.test(username)) {
-        try {
-          // Use authoredMergeRequests or assignedMergeRequests based on search type
-          const fieldName = searchType === 'author' ? 'authoredMergeRequests' : 'assignedMergeRequests';
+      const isValidUsername = /^[a-zA-Z0-9_-]+$/.test(username);
+      if (isValidUsername) {
+        const fieldName = searchType === 'author' ? 'authoredMergeRequests' : 'assignedMergeRequests';
 
-          const query = gql`
-            query searchUserMergeRequests($username: String!, $first: Int!, $after: String, $state: MergeRequestState) {
-              user(username: $username) {
-                ${fieldName}(first: $first, after: $after, state: $state) {
-                  pageInfo {
-                    hasNextPage
-                    hasPreviousPage
-                    startCursor
-                    endCursor
-                  }
-                  nodes {
-                    id
-                    iid
-                    title
-                    description
-                    state
-                    webUrl
-                    createdAt
-                    updatedAt
-                    mergedAt
-                    sourceBranch
-                    targetBranch
-                    author {
-                      id
-                      username
-                      name
-                    }
-                    assignees {
-                      nodes {
-                        username
-                        name
-                      }
-                    }
-                    reviewers {
-                      nodes {
-                        username
-                        name
-                      }
-                    }
-                    labels {
-                      nodes {
-                        title
-                        color
-                      }
-                    }
-                    project {
-                      fullPath
-                    }
-                  }
+        const query = gql`
+          query searchUserMergeRequests($username: String!, $first: Int!, $after: String, $state: MergeRequestState) {
+            user(username: $username) {
+              ${fieldName}(first: $first, after: $after, state: $state) {
+                pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+                nodes {
+                  id
+                  iid
+                  title
+                  state
+                  webUrl
+                  createdAt
+                  updatedAt
+                  mergedAt
+                  sourceBranch
+                  targetBranch
+                  author { username name }
+                  project { fullPath }
                 }
               }
             }
-          `;
+          }
+        `;
 
+        try {
           const result = await this.query(query, {
             username,
-            first,
+            first: Math.min(first, 50),
             after,
             state: mappedState
           }, userConfig);
@@ -980,7 +1060,9 @@ export class GitLabGraphQLClient {
             return result.user[fieldName];
           }
         } catch (e) {
-          // User not found or query failed - fall through to error message
+          if (e instanceof GitLabAPIError && !e.isRetryable) {
+            throw e;
+          }
         }
       }
 
