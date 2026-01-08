@@ -834,6 +834,262 @@ const getUserMergeRequestsTool: Tool = {
 };
 
 // ============================================================================
+// Comments & Discussions Tools
+// ============================================================================
+
+const getIssueNotesTool: Tool = {
+  name: 'get_issue_notes',
+  description: 'List all comments/notes on an issue with pagination',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Issue IID (internal ID visible in GitLab UI)'),
+    first: z.number().min(1).max(100).default(20).describe('Number of notes to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination (from pageInfo.endCursor)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getIssueNotes(
+      input.projectPath,
+      input.iid,
+      input.first,
+      input.after,
+      credentials
+    );
+    return result.project.issue.notes;
+  },
+};
+
+const getMergeRequestNotesTool: Tool = {
+  name: 'get_merge_request_notes',
+  description: 'List all comments/notes on a merge request with pagination',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+    first: z.number().min(1).max(100).default(20).describe('Number of notes to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination (from pageInfo.endCursor)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getMergeRequestNotes(
+      input.projectPath,
+      input.iid,
+      input.first,
+      input.after,
+      credentials
+    );
+    return result.project.mergeRequest.notes;
+  },
+};
+
+const getDiscussionsTool: Tool = {
+  name: 'get_discussions',
+  description: 'Get discussion threads on an issue or merge request, including code review comments with file positions',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Issue or MR IID (internal ID visible in GitLab UI)'),
+    type: z.enum(['issue', 'merge_request']).describe('Resource type: "issue" or "merge_request"'),
+    first: z.number().min(1).max(100).default(20).describe('Number of discussions to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination (from pageInfo.endCursor)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getDiscussions(
+      input.projectPath,
+      input.iid,
+      input.type,
+      input.first,
+      input.after,
+      credentials
+    );
+    const resourceType = input.type === 'issue' ? 'issue' : 'mergeRequest';
+    return result.project[resourceType].discussions;
+  },
+};
+
+const createIssueNoteTool: Tool = {
+  name: 'create_issue_note',
+  description: 'Add a comment to an issue',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Issue IID (internal ID visible in GitLab UI)'),
+    body: z.string().min(1).describe('Comment text (supports GitLab markdown)'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for creating issue notes. Please provide your GitLab credentials.');
+    }
+    const result = await client.createIssueNote(
+      input.projectPath,
+      input.iid,
+      input.body,
+      credentials
+    );
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.note;
+  },
+};
+
+const createMergeRequestNoteTool: Tool = {
+  name: 'create_merge_request_note',
+  description: 'Add a comment to a merge request, optionally at a specific code position for code review',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+    body: z.string().min(1).describe('Comment text (supports GitLab markdown)'),
+    position: z.object({
+      filePath: z.string().describe('File path in the repository'),
+      newLine: z.number().describe('Line number in new version of file'),
+      oldLine: z.number().optional().describe('Line number in old version of file (for deletions)'),
+    }).optional().describe('Code position for inline code review comments'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for creating merge request notes. Please provide your GitLab credentials.');
+    }
+    const result = await client.createMergeRequestNote(
+      input.projectPath,
+      input.iid,
+      input.body,
+      input.position,
+      credentials
+    );
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.note;
+  },
+};
+
+const updateNoteTool: Tool = {
+  name: 'update_note',
+  description: 'Edit an existing comment/note (only author can edit their own notes)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    noteId: z.string().describe('Note ID (GraphQL global ID, format: "gid://gitlab/Note/123")'),
+    body: z.string().min(1).describe('Updated comment text (supports GitLab markdown)'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for updating notes. Please provide your GitLab credentials.');
+    }
+    const result = await client.updateNote(input.noteId, input.body, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.note;
+  },
+};
+
+const deleteNoteTool: Tool = {
+  name: 'delete_note',
+  description: 'Delete a comment/note (destructive - cannot be undone, only author can delete their own notes)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    noteId: z.string().describe('Note ID (GraphQL global ID, format: "gid://gitlab/Note/123")'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for deleting notes. Please provide your GitLab credentials.');
+    }
+    const result = await client.deleteNote(input.noteId, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.note;
+  },
+};
+
+const resolveDiscussionTool: Tool = {
+  name: 'resolve_discussion',
+  description: 'Mark a discussion thread as resolved or unresolved (idempotent - safe to call multiple times)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    discussionId: z.string().describe('Discussion ID (GraphQL global ID, format: "gid://gitlab/Discussion/...")'),
+    resolved: z.boolean().describe('Whether to mark as resolved (true) or unresolved (false)'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for resolving discussions. Please provide your GitLab credentials.');
+    }
+    const result = await client.resolveDiscussion(
+      input.discussionId,
+      input.resolved,
+      credentials
+    );
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.discussion;
+  },
+};
+
+export const commentsTools: Tool[] = [
+  getIssueNotesTool,
+  getMergeRequestNotesTool,
+  getDiscussionsTool,
+  createIssueNoteTool,
+  createMergeRequestNoteTool,
+  updateNoteTool,
+  deleteNoteTool,
+  resolveDiscussionTool,
+];
+
+// ============================================================================
 // Merge Request Operations Tools
 // ============================================================================
 
@@ -1328,6 +1584,7 @@ export const tools: Tool[] = [
   resolvePathTool,
   getGroupProjectsTool,
   getTypeFieldsTool,
+  ...commentsTools,
   ...mergeRequestOperationsTools,
   ...cicdTools,
   ...searchTools,

@@ -1996,4 +1996,406 @@ export class GitLabGraphQLClient {
 
     return { [mutationName]: payload };
   }
+
+  // ============================================================================
+  // Comments & Discussions
+  // ============================================================================
+
+  async getIssueNotes(
+    projectPath: string,
+    iid: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getIssueNotes($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          issue(iid: $iid) {
+            id
+            iid
+            title
+            notes(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              nodes {
+                id
+                body
+                createdAt
+                updatedAt
+                system
+                author {
+                  id
+                  username
+                  name
+                  avatarUrl
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, {
+      projectPath,
+      iid,
+      first: Math.min(first, 50),
+      after
+    }, userConfig);
+  }
+
+  async getMergeRequestNotes(
+    projectPath: string,
+    iid: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestNotes($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            id
+            iid
+            title
+            notes(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              nodes {
+                id
+                body
+                createdAt
+                updatedAt
+                system
+                author {
+                  id
+                  username
+                  name
+                  avatarUrl
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, {
+      projectPath,
+      iid,
+      first: Math.min(first, 50),
+      after
+    }, userConfig);
+  }
+
+  async getDiscussions(
+    projectPath: string,
+    iid: string,
+    type: 'issue' | 'merge_request',
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const resourceType = type === 'issue' ? 'issue' : 'mergeRequest';
+
+    const query = gql`
+      query getDiscussions($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          ${resourceType}(iid: $iid) {
+            id
+            iid
+            discussions(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              nodes {
+                id
+                resolved
+                notes {
+                  nodes {
+                    id
+                    body
+                    createdAt
+                    system
+                    author {
+                      username
+                      name
+                      avatarUrl
+                    }
+                    position {
+                      ... on DiffPosition {
+                        filePath
+                        oldLine
+                        newLine
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, {
+      projectPath,
+      iid,
+      first: Math.min(first, 50),
+      after
+    }, userConfig);
+  }
+
+  async createIssueNote(
+    projectPath: string,
+    iid: string,
+    body: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['createNote'] ? 'createNote' : null;
+
+    if (!mutationName) {
+      throw new Error('Note creation mutation not available on this GitLab instance');
+    }
+
+    // Get issue ID first
+    const issueQuery = gql`
+      query getIssueId($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          issue(iid: $iid) {
+            id
+          }
+        }
+      }
+    `;
+
+    const issueResult = await this.query(issueQuery, { projectPath, iid }, userConfig);
+    const noteableId = issueResult.project.issue.id;
+
+    const mutation = gql`
+      mutation createIssueNote($input: CreateNoteInput!) {
+        ${mutationName}(input: $input) {
+          note {
+            id
+            body
+            createdAt
+            author {
+              username
+              name
+            }
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { noteableId, body };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to create note: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async createMergeRequestNote(
+    projectPath: string,
+    iid: string,
+    body: string,
+    position?: { filePath: string; newLine: number; oldLine?: number },
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = position ?
+      (fields['createDiffNote'] ? 'createDiffNote' : fields['createNote'] ? 'createNote' : null) :
+      (fields['createNote'] ? 'createNote' : null);
+
+    if (!mutationName) {
+      throw new Error('Note creation mutation not available on this GitLab instance');
+    }
+
+    // Get MR ID first
+    const mrQuery = gql`
+      query getMRId($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            id
+          }
+        }
+      }
+    `;
+
+    const mrResult = await this.query(mrQuery, { projectPath, iid }, userConfig);
+    const noteableId = mrResult.project.mergeRequest.id;
+
+    const mutation = gql`
+      mutation createMergeRequestNote($input: CreateNoteInput!) {
+        ${mutationName}(input: $input) {
+          note {
+            id
+            body
+            createdAt
+            author {
+              username
+              name
+            }
+          }
+          errors
+        }
+      }
+    `;
+
+    const input: any = { noteableId, body };
+    if (position) {
+      input.position = {
+        filePath: position.filePath,
+        newLine: position.newLine,
+        oldLine: position.oldLine
+      };
+    }
+
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to create note: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async updateNote(
+    noteId: string,
+    body: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['updateNote'] ? 'updateNote' : null;
+
+    if (!mutationName) {
+      throw new Error('Note update mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation updateNote($input: UpdateNoteInput!) {
+        ${mutationName}(input: $input) {
+          note {
+            id
+            body
+            updatedAt
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { id: noteId, body };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to update note: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async deleteNote(
+    noteId: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['destroyNote'] ? 'destroyNote' :
+                        (fields['deleteNote'] ? 'deleteNote' : null);
+
+    if (!mutationName) {
+      throw new Error('Note deletion mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation deleteNote($input: DestroyNoteInput!) {
+        ${mutationName}(input: $input) {
+          note {
+            id
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { id: noteId };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to delete note: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async resolveDiscussion(
+    discussionId: string,
+    resolved: boolean,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['discussionToggleResolve'] ? 'discussionToggleResolve' : null;
+
+    if (!mutationName) {
+      throw new Error('Discussion resolve mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation resolveDiscussion($input: DiscussionToggleResolveInput!) {
+        ${mutationName}(input: $input) {
+          discussion {
+            id
+            resolved
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { id: discussionId, resolve: resolved };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to resolve discussion: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
 }
