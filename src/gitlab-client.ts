@@ -1240,7 +1240,439 @@ export class GitLabGraphQLClient {
         }
       }
     `;
-    
+
     return this.query(query, { search: searchTerm, first: Math.min(first, 50) }, userConfig);
+  }
+
+  // ============================================================================
+  // CI/CD Pipelines
+  // ============================================================================
+
+  async getPipelines(
+    projectPath: string,
+    status?: string,
+    ref?: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getPipelines($projectPath: ID!, $status: PipelineStatusEnum, $ref: String, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          pipelines(status: $status, ref: $ref, first: $first, after: $after) {
+            pageInfo {
+              hasNextPage
+              hasPreviousPage
+              startCursor
+              endCursor
+            }
+            nodes {
+              id
+              iid
+              status
+              ref
+              sha
+              createdAt
+              updatedAt
+              startedAt
+              finishedAt
+              duration
+              webUrl
+              user {
+                username
+                name
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, {
+      projectPath,
+      status: status?.toUpperCase(),
+      ref,
+      first: Math.min(first, 50),
+      after
+    }, userConfig);
+  }
+
+  async getPipeline(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getPipeline($projectPath: ID!, $iid: ID!) {
+        project(fullPath: $projectPath) {
+          pipeline(iid: $iid) {
+            id
+            iid
+            status
+            ref
+            sha
+            createdAt
+            updatedAt
+            startedAt
+            finishedAt
+            duration
+            coverage
+            webUrl
+            user {
+              username
+              name
+            }
+            jobs {
+              nodes {
+                id
+                name
+                status
+                stage
+                createdAt
+                startedAt
+                finishedAt
+                duration
+                webUrl
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, { projectPath, iid }, userConfig);
+  }
+
+  async getPipelineJobs(
+    projectPath: string,
+    pipelineIid: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getPipelineJobs($projectPath: ID!, $iid: ID!, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          pipeline(iid: $iid) {
+            jobs(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              nodes {
+                id
+                name
+                status
+                stage
+                createdAt
+                startedAt
+                finishedAt
+                duration
+                coverage
+                webUrl
+                artifacts {
+                  nodes {
+                    fileType
+                    size
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, {
+      projectPath,
+      iid: pipelineIid,
+      first: Math.min(first, 50),
+      after
+    }, userConfig);
+  }
+
+  async getJob(
+    projectPath: string,
+    jobId: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getJob($projectPath: ID!, $jobId: JobID!) {
+        project(fullPath: $projectPath) {
+          job(id: $jobId) {
+            id
+            name
+            status
+            stage
+            createdAt
+            startedAt
+            finishedAt
+            duration
+            coverage
+            webUrl
+            pipeline {
+              id
+              iid
+              status
+            }
+            artifacts {
+              nodes {
+                fileType
+                size
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, { projectPath, jobId }, userConfig);
+  }
+
+  async getJobArtifacts(
+    projectPath: string,
+    jobId: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getJobArtifacts($projectPath: ID!, $jobId: JobID!) {
+        project(fullPath: $projectPath) {
+          job(id: $jobId) {
+            id
+            name
+            artifacts {
+              nodes {
+                fileType
+                size
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, { projectPath, jobId }, userConfig);
+  }
+
+  async triggerPipeline(
+    projectPath: string,
+    ref: string,
+    variables?: Record<string, string>,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    // Check for mutation existence (pipelineCreate is the standard mutation name)
+    const mutationName = fields['pipelineCreate'] ? 'pipelineCreate' :
+                        (fields['createPipeline'] ? 'createPipeline' : null);
+
+    if (!mutationName) {
+      throw new Error('Pipeline trigger mutation not available on this GitLab instance. Requires GitLab 15.0+');
+    }
+
+    // Convert variables to array format if provided
+    const variableInputs = variables ? Object.entries(variables).map(([key, value]) => ({
+      key,
+      value
+    })) : [];
+
+    const mutation = gql`
+      mutation triggerPipeline($input: PipelineCreateInput!) {
+        ${mutationName}(input: $input) {
+          pipeline {
+            id
+            iid
+            status
+            ref
+            sha
+            webUrl
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = {
+      projectPath,
+      ref,
+      variables: variableInputs.length > 0 ? variableInputs : undefined
+    };
+
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to trigger pipeline: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async retryPipeline(
+    projectPath: string,
+    pipelineId: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['pipelineRetry'] ? 'pipelineRetry' :
+                        (fields['retryPipeline'] ? 'retryPipeline' : null);
+
+    if (!mutationName) {
+      throw new Error('Pipeline retry mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation retryPipeline($input: PipelineRetryInput!) {
+        ${mutationName}(input: $input) {
+          pipeline {
+            id
+            iid
+            status
+            webUrl
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { id: pipelineId };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to retry pipeline: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async cancelPipeline(
+    projectPath: string,
+    pipelineId: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['pipelineCancel'] ? 'pipelineCancel' :
+                        (fields['cancelPipeline'] ? 'cancelPipeline' : null);
+
+    if (!mutationName) {
+      throw new Error('Pipeline cancel mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation cancelPipeline($input: PipelineCancelInput!) {
+        ${mutationName}(input: $input) {
+          pipeline {
+            id
+            iid
+            status
+            webUrl
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { id: pipelineId };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to cancel pipeline: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async retryJob(
+    projectPath: string,
+    jobId: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['jobRetry'] ? 'jobRetry' :
+                        (fields['retryJob'] ? 'retryJob' : null);
+
+    if (!mutationName) {
+      throw new Error('Job retry mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation retryJob($input: JobRetryInput!) {
+        ${mutationName}(input: $input) {
+          job {
+            id
+            name
+            status
+            webUrl
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { id: jobId };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to retry job: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async cancelJob(
+    projectPath: string,
+    jobId: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['jobCancel'] ? 'jobCancel' :
+                        (fields['cancelJob'] ? 'cancelJob' : null);
+
+    if (!mutationName) {
+      throw new Error('Job cancel mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation cancelJob($input: JobCancelInput!) {
+        ${mutationName}(input: $input) {
+          job {
+            id
+            name
+            status
+            webUrl
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { id: jobId };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to cancel job: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
   }
 }

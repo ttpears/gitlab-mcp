@@ -833,6 +833,282 @@ const getUserMergeRequestsTool: Tool = {
   },
 };
 
+// ============================================================================
+// CI/CD Pipeline Tools
+// ============================================================================
+
+const getPipelinesTool: Tool = {
+  name: 'get_pipelines',
+  description: 'List CI/CD pipelines for a project with optional filtering by status (SUCCESS, FAILED, RUNNING, etc.) and git ref',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    status: z.string().optional().describe('Filter by pipeline status (SUCCESS, FAILED, RUNNING, PENDING, CANCELED, SKIPPED, MANUAL)'),
+    ref: z.string().optional().describe('Filter by git reference (branch, tag, or commit SHA)'),
+    first: z.number().min(1).max(100).default(20).describe('Number of pipelines to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination (from pageInfo.endCursor)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getPipelines(
+      input.projectPath,
+      input.status,
+      input.ref,
+      input.first,
+      input.after,
+      credentials
+    );
+    return result.project.pipelines;
+  },
+};
+
+const getPipelineTool: Tool = {
+  name: 'get_pipeline',
+  description: 'Get detailed information about a specific pipeline including its jobs and status',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Pipeline IID (internal ID visible in GitLab UI)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getPipeline(input.projectPath, input.iid, credentials);
+    return result.project.pipeline;
+  },
+};
+
+const getPipelineJobsTool: Tool = {
+  name: 'get_pipeline_jobs',
+  description: 'List all jobs in a specific pipeline with their status, stage, and artifact information',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    pipelineIid: z.string().describe('Pipeline IID (internal ID visible in GitLab UI)'),
+    first: z.number().min(1).max(100).default(20).describe('Number of jobs to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination (from pageInfo.endCursor)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getPipelineJobs(
+      input.projectPath,
+      input.pipelineIid,
+      input.first,
+      input.after,
+      credentials
+    );
+    return result.project.pipeline.jobs;
+  },
+};
+
+const getJobTool: Tool = {
+  name: 'get_job',
+  description: 'Get detailed information about a specific CI/CD job including status, duration, and logs',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    jobId: z.string().describe('Job ID (GraphQL global ID, format: "gid://gitlab/Ci::Build/123")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getJob(input.projectPath, input.jobId, credentials);
+    return result.project.job;
+  },
+};
+
+const getJobArtifactsTool: Tool = {
+  name: 'get_job_artifacts',
+  description: 'List artifacts produced by a specific CI/CD job with file type and size information',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    jobId: z.string().describe('Job ID (GraphQL global ID, format: "gid://gitlab/Ci::Build/123")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getJobArtifacts(input.projectPath, input.jobId, credentials);
+    return result.project.job;
+  },
+};
+
+const triggerPipelineTool: Tool = {
+  name: 'trigger_pipeline',
+  description: 'Trigger a new CI/CD pipeline on a specific branch, tag, or commit with optional variables',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    ref: z.string().describe('Git reference to run pipeline on (branch, tag, or commit SHA)'),
+    variables: z.record(z.string()).optional().describe('Pipeline variables as key-value pairs (e.g., {"ENV": "production", "DEPLOY": "true"})'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for triggering pipelines. Please provide your GitLab credentials.');
+    }
+    const result = await client.triggerPipeline(
+      input.projectPath,
+      input.ref,
+      input.variables,
+      credentials
+    );
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.pipeline;
+  },
+};
+
+const retryPipelineTool: Tool = {
+  name: 'retry_pipeline',
+  description: 'Retry a failed pipeline to re-run all failed jobs (idempotent - safe to retry)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    pipelineId: z.string().describe('Pipeline ID (GraphQL global ID, format: "gid://gitlab/Ci::Pipeline/123")'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for retrying pipelines. Please provide your GitLab credentials.');
+    }
+    const result = await client.retryPipeline(input.projectPath, input.pipelineId, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.pipeline;
+  },
+};
+
+const cancelPipelineTool: Tool = {
+  name: 'cancel_pipeline',
+  description: 'Cancel a running pipeline and all its jobs (destructive - cannot be undone)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    pipelineId: z.string().describe('Pipeline ID (GraphQL global ID, format: "gid://gitlab/Ci::Pipeline/123")'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for canceling pipelines. Please provide your GitLab credentials.');
+    }
+    const result = await client.cancelPipeline(input.projectPath, input.pipelineId, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.pipeline;
+  },
+};
+
+const retryJobTool: Tool = {
+  name: 'retry_job',
+  description: 'Retry a failed or canceled CI/CD job (idempotent - safe to retry)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    jobId: z.string().describe('Job ID (GraphQL global ID, format: "gid://gitlab/Ci::Build/123")'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for retrying jobs. Please provide your GitLab credentials.');
+    }
+    const result = await client.retryJob(input.projectPath, input.jobId, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.job;
+  },
+};
+
+const cancelJobTool: Tool = {
+  name: 'cancel_job',
+  description: 'Cancel a running or pending CI/CD job (destructive - cannot be undone)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    jobId: z.string().describe('Job ID (GraphQL global ID, format: "gid://gitlab/Ci::Build/123")'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for canceling jobs. Please provide your GitLab credentials.');
+    }
+    const result = await client.cancelJob(input.projectPath, input.jobId, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.job;
+  },
+};
+
+export const cicdTools: Tool[] = [
+  getPipelinesTool,
+  getPipelineTool,
+  getPipelineJobsTool,
+  getJobTool,
+  getJobArtifactsTool,
+  triggerPipelineTool,
+  retryPipelineTool,
+  cancelPipelineTool,
+  retryJobTool,
+  cancelJobTool,
+];
+
 export const searchTools: Tool[] = [
   globalSearchTool,
   searchProjectsTool,
@@ -855,5 +1131,6 @@ export const tools: Tool[] = [
   resolvePathTool,
   getGroupProjectsTool,
   getTypeFieldsTool,
+  ...cicdTools,
   ...searchTools,
 ];
