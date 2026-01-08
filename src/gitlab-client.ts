@@ -1675,4 +1675,325 @@ export class GitLabGraphQLClient {
 
     return { [mutationName]: payload };
   }
+
+  // ============================================================================
+  // Merge Request Operations
+  // ============================================================================
+
+  async getMergeRequestDiff(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestDiff($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            id
+            iid
+            title
+            diffStatsSummary {
+              additions
+              deletions
+              changes
+              fileCount
+            }
+            diffRefs {
+              baseSha
+              headSha
+              startSha
+            }
+            diffHeadSha
+            conflicts
+          }
+        }
+      }
+    `;
+
+    return this.query(query, { projectPath, iid }, userConfig);
+  }
+
+  async getMergeRequestApprovals(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestApprovals($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            id
+            iid
+            title
+            approved
+            approvalsLeft
+            approvalsRequired
+            approvedBy {
+              nodes {
+                id
+                username
+                name
+                avatarUrl
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, { projectPath, iid }, userConfig);
+  }
+
+  async getMergeRequestChanges(
+    projectPath: string,
+    iid: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestChanges($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            id
+            iid
+            title
+            diffStatsSummary {
+              additions
+              deletions
+              changes
+              fileCount
+            }
+            commits(first: $first, after: $after) {
+              pageInfo {
+                hasNextPage
+                hasPreviousPage
+                startCursor
+                endCursor
+              }
+              nodes {
+                id
+                sha
+                shortId
+                title
+                message
+                authorName
+                authoredDate
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    return this.query(query, {
+      projectPath,
+      iid,
+      first: Math.min(first, 50),
+      after
+    }, userConfig);
+  }
+
+  async approveMergeRequest(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['mergeRequestApprove'] ? 'mergeRequestApprove' :
+                        (fields['approveMergeRequest'] ? 'approveMergeRequest' : null);
+
+    if (!mutationName) {
+      throw new Error('MR approval mutation not available on this GitLab instance');
+    }
+
+    // Get the MR ID first
+    const mrQuery = gql`
+      query getMRId($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            id
+          }
+        }
+      }
+    `;
+
+    const mrResult = await this.query(mrQuery, { projectPath, iid }, userConfig);
+    const mergeRequestId = mrResult.project.mergeRequest.id;
+
+    const mutation = gql`
+      mutation approveMergeRequest($input: MergeRequestApproveInput!) {
+        ${mutationName}(input: $input) {
+          mergeRequest {
+            id
+            iid
+            approved
+            approvalsLeft
+            approvalsRequired
+            approvedBy {
+              nodes {
+                username
+                name
+              }
+            }
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { projectPath, iid };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to approve merge request: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async unapproveMergeRequest(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['mergeRequestUnapprove'] ? 'mergeRequestUnapprove' :
+                        (fields['unapproveMergeRequest'] ? 'unapproveMergeRequest' : null);
+
+    if (!mutationName) {
+      throw new Error('MR unapproval mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation unapproveMergeRequest($input: MergeRequestUnapproveInput!) {
+        ${mutationName}(input: $input) {
+          mergeRequest {
+            id
+            iid
+            approved
+            approvedBy {
+              nodes {
+                username
+                name
+              }
+            }
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { projectPath, iid };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to unapprove merge request: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async mergeMergeRequest(
+    projectPath: string,
+    iid: string,
+    strategy?: 'merge' | 'squash' | 'rebase_merge',
+    deleteSourceBranch?: boolean,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['mergeRequestMerge'] ? 'mergeRequestMerge' :
+                        (fields['mergeMergeRequest'] ? 'mergeMergeRequest' : null);
+
+    if (!mutationName) {
+      throw new Error('MR merge mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation mergeMergeRequest($input: MergeRequestMergeInput!) {
+        ${mutationName}(input: $input) {
+          mergeRequest {
+            id
+            iid
+            state
+            mergedAt
+            mergedBy {
+              username
+              name
+            }
+          }
+          errors
+        }
+      }
+    `;
+
+    const input: any = { projectPath, iid };
+
+    if (strategy === 'squash') {
+      input.squash = true;
+    }
+    if (deleteSourceBranch !== undefined) {
+      input.shouldRemoveSourceBranch = deleteSourceBranch;
+    }
+
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to merge merge request: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
+
+  async rebaseMergeRequest(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const mutationName = fields['mergeRequestRebase'] ? 'mergeRequestRebase' :
+                        (fields['rebaseMergeRequest'] ? 'rebaseMergeRequest' : null);
+
+    if (!mutationName) {
+      throw new Error('MR rebase mutation not available on this GitLab instance');
+    }
+
+    const mutation = gql`
+      mutation rebaseMergeRequest($input: MergeRequestRebaseInput!) {
+        ${mutationName}(input: $input) {
+          mergeRequest {
+            id
+            iid
+            rebaseInProgress
+          }
+          errors
+        }
+      }
+    `;
+
+    const input = { projectPath, iid };
+    const result = await this.query(mutation, { input }, userConfig, true);
+    const payload = (result as any)[mutationName];
+
+    if (payload.errors && payload.errors.length > 0) {
+      throw new Error(`Failed to rebase merge request: ${payload.errors.join(', ')}`);
+    }
+
+    return { [mutationName]: payload };
+  }
 }

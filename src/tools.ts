@@ -834,6 +834,203 @@ const getUserMergeRequestsTool: Tool = {
 };
 
 // ============================================================================
+// Merge Request Operations Tools
+// ============================================================================
+
+const getMergeRequestDiffTool: Tool = {
+  name: 'get_merge_request_diff',
+  description: 'Get file changes and diff statistics for a merge request',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getMergeRequestDiff(input.projectPath, input.iid, credentials);
+    return result.project.mergeRequest;
+  },
+};
+
+const getMergeRequestApprovalsTool: Tool = {
+  name: 'get_merge_request_approvals',
+  description: 'Get approval status and list of approvers for a merge request',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getMergeRequestApprovals(input.projectPath, input.iid, credentials);
+    return result.project.mergeRequest;
+  },
+};
+
+const getMergeRequestChangesTool: Tool = {
+  name: 'get_merge_request_changes',
+  description: 'Get detailed change summary including commits and diff stats for a merge request',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+    first: z.number().min(1).max(100).default(20).describe('Number of commits to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination (from pageInfo.endCursor)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getMergeRequestChanges(
+      input.projectPath,
+      input.iid,
+      input.first,
+      input.after,
+      credentials
+    );
+    return result.project.mergeRequest;
+  },
+};
+
+const approveMergeRequestTool: Tool = {
+  name: 'approve_merge_request',
+  description: 'Approve a merge request (idempotent - safe to call multiple times)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for approving merge requests. Please provide your GitLab credentials.');
+    }
+    const result = await client.approveMergeRequest(input.projectPath, input.iid, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.mergeRequest;
+  },
+};
+
+const unapproveMergeRequestTool: Tool = {
+  name: 'unapprove_merge_request',
+  description: 'Remove your approval from a merge request',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for unapproving merge requests. Please provide your GitLab credentials.');
+    }
+    const result = await client.unapproveMergeRequest(input.projectPath, input.iid, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.mergeRequest;
+  },
+};
+
+const mergeMergeRequestTool: Tool = {
+  name: 'merge_merge_request',
+  description: 'Merge a merge request with optional squash and source branch deletion (destructive - cannot be undone)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+    strategy: z.enum(['merge', 'squash', 'rebase_merge']).optional().describe('Merge strategy: "merge" (default), "squash" (squash commits), or "rebase_merge" (rebase then merge)'),
+    deleteSourceBranch: z.boolean().optional().describe('Whether to delete the source branch after merging'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for merging merge requests. Please provide your GitLab credentials.');
+    }
+    const result = await client.mergeMergeRequest(
+      input.projectPath,
+      input.iid,
+      input.strategy,
+      input.deleteSourceBranch,
+      credentials
+    );
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.mergeRequest;
+  },
+};
+
+const rebaseMergeRequestTool: Tool = {
+  name: 'rebase_merge_request',
+  description: 'Rebase a merge request onto its target branch',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID (internal ID visible in GitLab UI)'),
+  }), false),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for rebasing merge requests. Please provide your GitLab credentials.');
+    }
+    const result = await client.rebaseMergeRequest(input.projectPath, input.iid, credentials);
+    const mutationName = Object.keys(result)[0];
+    const payload = result[mutationName];
+    return payload.mergeRequest;
+  },
+};
+
+export const mergeRequestOperationsTools: Tool[] = [
+  getMergeRequestDiffTool,
+  getMergeRequestApprovalsTool,
+  getMergeRequestChangesTool,
+  approveMergeRequestTool,
+  unapproveMergeRequestTool,
+  mergeMergeRequestTool,
+  rebaseMergeRequestTool,
+];
+
+// ============================================================================
 // CI/CD Pipeline Tools
 // ============================================================================
 
@@ -1131,6 +1328,7 @@ export const tools: Tool[] = [
   resolvePathTool,
   getGroupProjectsTool,
   getTypeFieldsTool,
+  ...mergeRequestOperationsTools,
   ...cicdTools,
   ...searchTools,
 ];
