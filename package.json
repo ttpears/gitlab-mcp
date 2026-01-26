@@ -13,7 +13,8 @@
     "prepublishOnly": "npm run build"
   },
   "bin": {
-    "gitlab-mcp-server": "dist/index.js"
+    "gitlab-mcp-server": "./dist/index.js",
+    "gitlab-mcp": "./dist/index.js"
   },
   "keywords": [
     "mcp",
@@ -51,6 +52,7 @@
   "files": [
     "dist",
     "LICENSE",
+    "README.md",
     "icon.svg"
   ]
 }

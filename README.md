@@ -2,17 +2,92 @@
 
 A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with automatic schema discovery and supports self-hosted GitLab instances. **Perfect for LLM-powered GitLab exploration and analysis.**
 
-## 🚀 **Recent Updates (2025-10-22)**
+## ⚡ Quick Start (Claude Desktop & Claude Code)
 
-**Major refactor for LibreChat compatibility:**
-- ✅ **Streamable HTTP transport** (MCP spec 2025-03-26) - Removed deprecated SSE
-- ✅ **Per-session credential isolation** - Fixed credential bleeding between users
-- ✅ **Proper session management** - Added HTTP 404/400 handling and DELETE support
-- ✅ **Accept header validation** - Full compliance with MCP specification
-- ✅ **Connection resilience** - Improved error handling and reconnection logic
-- ✅ **Consolidated endpoints** - Removed duplicate code, cleaner architecture
+The fastest way to get started with GitLab MCP:
 
-**These changes resolve LibreChat disconnection issues and improve overall stability.**
+### 1. Get Your GitLab Token
+Create a GitLab Personal Access Token with `read_api` or `api` scope:
+- Go to GitLab → **User Settings** → **Access Tokens**
+- Create token with appropriate scope
+- Copy the token (e.g., `glpat-xxxxxxxxxxxx`)
+
+### 2. Configure Claude Desktop or Claude Code
+
+**For Claude Desktop** - Add to `claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "gitlab": {
+      "command": "npx",
+      "args": ["-y", "gitlab-mcp-server"],
+      "env": {
+        "GITLAB_URL": "https://gitlab.com",
+        "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here",
+        "GITLAB_AUTH_MODE": "hybrid"
+      }
+    }
+  }
+}
+```
+
+**For Claude Code CLI** - Add to `.clauderc`:
+```json
+{
+  "mcpServers": {
+    "gitlab": {
+      "command": "npx",
+      "args": ["-y", "gitlab-mcp-server"],
+      "env": {
+        "GITLAB_URL": "https://gitlab.com",
+        "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here",
+        "GITLAB_AUTH_MODE": "hybrid"
+      }
+    }
+  }
+}
+```
+
+### 3. Restart Claude
+Restart Claude Desktop or Claude Code to load the GitLab MCP server.
+
+### 4. Test It
+Try asking Claude:
+- "Search for issues in project X"
+- "Show me recent merge requests"
+- "Browse the repository structure of project Y"
+
+### 🔍 Test with MCP Inspector
+Test your configuration before using it with Claude:
+
+```bash
+# Test with MCP Inspector (interactive UI)
+npx @modelcontextprotocol/inspector npx gitlab-mcp-server
+```
+
+Set environment variables when prompted or create `mcp-inspector.example.json`:
+```json
+{
+  "command": "npx",
+  "args": ["-y", "gitlab-mcp-server"],
+  "env": {
+    "GITLAB_URL": "https://gitlab.com",
+    "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-test-token"
+  }
+}
+```
+
+## 🚀 **Recent Updates (2026-01-26)**
+
+**Major modernization for universal MCP support:**
+- ✅ **Claude Desktop & Claude Code support** - Easy npx installation with stdio transport
+- ✅ **Removed deprecated SSE transport** - Clean Streamable HTTP only for LibreChat
+- ✅ **Enhanced logging** - Clear transport mode detection and configuration display
+- ✅ **Quick start documentation** - Copy-paste configs for all MCP clients
+- ✅ **MCP Inspector support** - Easy testing and debugging
+- ✅ **Single codebase** - Auto-detects stdio vs HTTP mode based on environment
+
+**These changes make GitLab MCP work seamlessly across all MCP clients while simplifying deployment.**
 
 ## ✨ **Key Features for LLMs**
 
@@ -167,6 +242,14 @@ The server supports three authentication modes:
 - Uses only the shared token for all operations
 - No per-user authentication supported
 - **Best for**: Single-user or trusted environments
+
+#### Authentication Mode Comparison
+
+| Mode | stdio (Claude Desktop/Code) | HTTP (LibreChat) | Use Case |
+|------|----------------------------|------------------|----------|
+| **hybrid** (default) | Uses `GITLAB_SHARED_ACCESS_TOKEN` from env + optional per-user PAT | Session headers + user credentials | Recommended for most deployments |
+| **shared** | Uses only `GITLAB_SHARED_ACCESS_TOKEN` from env | Uses only shared token | Single-user environments |
+| **per-user** | Requires PAT in env or tool args | Requires user PAT in session | Maximum security, multi-user |
 
 ### Environment Variables
 

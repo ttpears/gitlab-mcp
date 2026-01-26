@@ -3,9 +3,9 @@
 
 mcpServers:
   gitlab:
-    # SSE transport (recommended for LibreChat)
-    type: sse
-    url: "http://gitlab-mcp:8008/sse"
+    # Streamable HTTP transport (MCP 2025-03-26 standard)
+    type: streamable-http
+    url: "http://gitlab-mcp:8008/"
 
     # Server configuration
     serverInstructions: |

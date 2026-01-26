@@ -2,7 +2,6 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as http from 'http';
 import { randomUUID } from 'node:crypto';
@@ -25,7 +24,6 @@ import { tools } from './tools.js';
 class GitLabMCPServer {
   private server: Server;
   private gitlabClient!: GitLabGraphQLClient;
-  private sseTransports: Map<string, SSEServerTransport> = new Map();
   private httpTransports: Map<string, {
     transport: StreamableHTTPServerTransport;
     userConfig?: { accessToken: string; gitlabUrl?: string };
@@ -54,6 +52,16 @@ class GitLabMCPServer {
     // Initialize GitLab client using environment configuration
     const config = loadConfig();
     this.gitlabClient = new GitLabGraphQLClient(config);
+
+    // Log configuration on startup (for debugging)
+    if (process.env.NODE_ENV !== 'production') {
+      console.error('[MCP] Configuration loaded:');
+      console.error(`  GitLab URL: ${config.gitlabUrl}`);
+      console.error(`  Auth mode: ${config.authMode}`);
+      console.error(`  Shared token: ${config.sharedAccessToken ? '✓ configured' : '✗ not set'}`);
+      console.error(`  Max page size: ${config.maxPageSize}`);
+      console.error(`  Timeout: ${config.defaultTimeout}ms`);
+    }
   }
 
   private setupToolHandlers(): void {
@@ -480,120 +488,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           next();
         });
 
-        // SSE transport endpoints for LibreChat compatibility
-        app.get('/sse', async (req, res) => {
-          try {
-            // Emergency cleanup if we have too many sessions
-            if (this.sseTransports.size > 10) {
-              console.error(`[MCP] WARNING: ${this.sseTransports.size} SSE sessions accumulated! Forcing cleanup...`);
-
-              // Close all sessions - LibreChat will reconnect properly
-              const oldSessions = Array.from(this.sseTransports.keys());
-              for (const sessionId of oldSessions) {
-                const transport = this.sseTransports.get(sessionId);
-                if (transport) {
-                  try {
-                    transport.close();
-                  } catch (e) {
-                    // Ignore errors during emergency cleanup
-                  }
-                  this.sseTransports.delete(sessionId);
-                }
-              }
-              console.error(`[MCP] Emergency cleanup complete. Cleared ${oldSessions.length} sessions.`);
-            }
-
-            console.error('[MCP] New SSE connection request');
-
-            const sessionId = (req.query.sessionId as string) || randomUUID();
-
-            if (this.sseTransports.has(sessionId)) {
-              console.error(`[MCP] SSE session ${sessionId} already exists, rejecting`);
-              res.status(409).send('Session already exists');
-              return;
-            }
-
-            // Set aggressive timeouts to keep connection alive
-            req.socket.setTimeout(0); // Disable timeout
-            req.socket.setKeepAlive(true, 30000); // Send keepalive every 30s
-            res.socket?.setTimeout(0);
-            res.socket?.setKeepAlive(true, 30000);
-
-            const transport = new SSEServerTransport('/message', res);
-            this.sseTransports.set(transport.sessionId, transport);
-
-            console.error(`[MCP] SSE session ${transport.sessionId} created (total SSE sessions: ${this.sseTransports.size})`);
-
-            transport.onclose = () => {
-              console.error(`[MCP] SSE session ${transport.sessionId} closed (reason: connection ended)`);
-              this.sseTransports.delete(transport.sessionId);
-            };
-
-            // Handle client disconnect
-            req.on('close', () => {
-              console.error(`[MCP] Client disconnected for session ${transport.sessionId}`);
-              this.sseTransports.delete(transport.sessionId);
-            });
-
-            await this.server.connect(transport);
-
-            // Keep the SSE connection alive with periodic comments
-            // SSE connections need activity to prevent timeouts
-            const keepaliveInterval = setInterval(() => {
-              if (!res.socket || res.socket.destroyed) {
-                clearInterval(keepaliveInterval);
-                return;
-              }
-              // Send SSE comment to keep connection alive (won't be processed as data)
-              try {
-                res.write(': keepalive\n\n');
-              } catch (e) {
-                clearInterval(keepaliveInterval);
-              }
-            }, 15000); // Every 15 seconds
-
-            // Clean up interval when connection closes
-            res.on('close', () => {
-              clearInterval(keepaliveInterval);
-            });
-
-            // Don't end the response - SSE keeps it open
-            // The SDK's SSEServerTransport will manage the connection
-          } catch (error) {
-            console.error('[MCP] Error in SSE endpoint:', error);
-            if (!res.headersSent) {
-              res.status(500).send('Internal server error');
-            }
-          }
-        });
-
-        app.post('/message', async (req, res) => {
-          try {
-            const url = new URL(req.url || '', `http://localhost:${port}`);
-            const sessionId = url.searchParams.get('sessionId');
-
-            if (!sessionId) {
-              res.status(400).send('Missing session ID');
-              return;
-            }
-
-            const transport = this.sseTransports.get(sessionId);
-            if (!transport) {
-              res.status(404).send('Session not found');
-              return;
-            }
-
-            // The SDK's handlePostMessage needs the full request object, not just body
-            await transport.handlePostMessage(req as any, res as any);
-          } catch (error) {
-            console.error('[MCP] Error in message endpoint:', error);
-            if (!res.headersSent) {
-              res.status(500).send('Internal server error');
-            }
-          }
-        });
-
-        // Streamable HTTP endpoint at root (for other clients)
+        // Streamable HTTP endpoint at root (primary transport)
         app.all('/', (req, res) => this.handleStreamableHTTP(req, res));
 
         // Alternative /mcp endpoint for container compatibility
@@ -656,7 +551,6 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
             status: 'healthy',
             timestamp: new Date().toISOString(),
             transports: {
-              sse: this.sseTransports.size,
               streamableHttp: this.httpTransports.size
             },
             protocol: '2025-03-26'
@@ -664,21 +558,45 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
         });
 
         app.listen(port, () => {
-          console.error(`GitLab MCP Server running on HTTP port ${port}`);
-          console.error(`SSE transport: http://localhost:${port}/sse (for LibreChat)`);
-          console.error(`Streamable HTTP: http://localhost:${port}/ (for other clients)`);
+          console.error('='.repeat(60));
+          console.error('GitLab MCP Server - HTTP Mode');
+          console.error('='.repeat(60));
+          console.error(`Server: http://localhost:${port}`);
+          console.error(`Streamable HTTP: http://localhost:${port}/ (recommended)`);
+          console.error(`Alternative: http://localhost:${port}/mcp`);
           console.error(`Health check: http://localhost:${port}/health`);
-          console.error(`Supported transports: SSE, Streamable HTTP`);
+          console.error(`Protocol: MCP 2025-03-26`);
+          console.error('');
+          console.error('Configuration:');
+          console.error(`  Auth mode: ${loadConfig().authMode}`);
+          console.error(`  GitLab URL: ${loadConfig().gitlabUrl}`);
+          console.error(`  Session cleanup: 10min timeout, checked every 2min`);
+          console.error('');
+          console.error('For LibreChat: Use streamable-http transport in librechat.yml');
+          console.error('='.repeat(60));
 
           // Start session cleanup
           this.startSessionCleanup();
-          console.error(`Session cleanup enabled (10min timeout, checked every 2min)`);
         });
       } else {
         // Default to stdio transport
+        const config = loadConfig();
+        console.error('='.repeat(60));
+        console.error('GitLab MCP Server - stdio Mode');
+        console.error('='.repeat(60));
+        console.error('Transport: stdio (for Claude Desktop, Claude Code, VS Code)');
+        console.error(`Protocol: MCP 2025-03-26`);
+        console.error('');
+        console.error('Configuration:');
+        console.error(`  Auth mode: ${config.authMode}`);
+        console.error(`  GitLab URL: ${config.gitlabUrl}`);
+        console.error(`  Shared token: ${config.sharedAccessToken ? '✓ configured' : '✗ not set'}`);
+        console.error('');
+        console.error('Tip: Set GITLAB_MCP_PORT to enable HTTP mode for LibreChat');
+        console.error('='.repeat(60));
+
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
-        console.error('GitLab MCP Server running on stdio');
       }
     } catch (error) {
       console.error('Failed to start server:', error);

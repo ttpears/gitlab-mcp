@@ -1,0 +1,10 @@
+{
+  "command": "npx",
+  "args": ["-y", "gitlab-mcp-server"],
+  "env": {
+    "GITLAB_URL": "https://gitlab.com",
+    "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-test-token",
+    "GITLAB_AUTH_MODE": "hybrid",
+    "GITLAB_MAX_PAGE_SIZE": "50"
+  }
+}
