@@ -9,6 +9,11 @@ import { URL, fileURLToPath } from 'url';
 import express from 'express';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { z } from 'zod';
+
+// Helper to break type inference chain and avoid "Type instantiation is excessively deep" errors
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const toJsonSchema = (schema: any): Record<string, unknown> =>
+  zodToJsonSchema(schema, { target: 'jsonSchema7' }) as Record<string, unknown>;
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -35,7 +40,7 @@ class GitLabMCPServer {
     this.server = new Server(
       {
         name: 'gitlab-mcp-server',
-        version: '1.2.0',
+        version: '1.7.0',
       },
       {
         capabilities: {
@@ -69,9 +74,12 @@ class GitLabMCPServer {
       return {
         tools: tools.map(tool => ({
           name: tool.name,
+          ...(tool.title && { title: tool.title }),
           description: tool.description,
-          inputSchema: zodToJsonSchema(tool.inputSchema, { target: 'jsonSchema7' }),
+          inputSchema: toJsonSchema(tool.inputSchema),
+          ...(tool.outputSchema && { outputSchema: toJsonSchema(tool.outputSchema) }),
           ...(tool.annotations && { annotations: tool.annotations }),
+          ...(tool.icon && { icon: tool.icon }),
         })),
       };
     });
@@ -124,6 +132,7 @@ class GitLabMCPServer {
     const prompts = [
       {
         name: 'explore-project',
+        title: 'Explore Project',
         description: 'Explore a GitLab project structure and recent activity',
         arguments: [
           {
@@ -135,11 +144,13 @@ class GitLabMCPServer {
       },
       {
         name: 'find-my-work',
+        title: 'Find My Work',
         description: 'Find issues and merge requests assigned to you',
         arguments: [],
       },
       {
         name: 'review-merge-request',
+        title: 'Review Merge Request',
         description: 'Review a specific merge request with code changes',
         arguments: [
           {
@@ -472,7 +483,8 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           res.header('Access-Control-Allow-Origin', '*');
           res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
           res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID, Cache-Control');
-          res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+          res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version');
+          res.header('MCP-Protocol-Version', '2025-11-25');
 
           // Disable buffering for SSE streams
           if (req.headers.accept?.includes('text/event-stream')) {
@@ -532,7 +544,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
         // Container-runtime compatibility: serve config schema
         app.get('/.well-known/mcp-config', (req, res) => {
           res.set('Content-Type', 'application/schema+json; charset=utf-8');
-          const baseSchema = zodToJsonSchema(configSchema, { target: 'jsonSchema7' });
+          const baseSchema = toJsonSchema(configSchema);
           const configJsonSchema = {
             $schema: 'https://json-schema.org/draft/2020-12/schema',
             $id: `${req.protocol}://${req.get('host')}/.well-known/mcp-config`,
@@ -553,7 +565,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
             transports: {
               streamableHttp: this.httpTransports.size
             },
-            protocol: '2025-03-26'
+            protocol: '2025-11-25'
           });
         });
 
@@ -565,7 +577,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           console.error(`Streamable HTTP: http://localhost:${port}/ (recommended)`);
           console.error(`Alternative: http://localhost:${port}/mcp`);
           console.error(`Health check: http://localhost:${port}/health`);
-          console.error(`Protocol: MCP 2025-03-26`);
+          console.error(`Protocol: MCP 2025-11-25`);
           console.error('');
           console.error('Configuration:');
           console.error(`  Auth mode: ${loadConfig().authMode}`);
@@ -585,7 +597,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
         console.error('GitLab MCP Server - stdio Mode');
         console.error('='.repeat(60));
         console.error('Transport: stdio (for Claude Desktop, Claude Code, VS Code)');
-        console.error(`Protocol: MCP 2025-03-26`);
+        console.error(`Protocol: MCP 2025-11-25`);
         console.error('');
         console.error('Configuration:');
         console.error(`  Auth mode: ${config.authMode}`);

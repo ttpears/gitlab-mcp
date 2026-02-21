@@ -4,8 +4,10 @@ import { validateUserConfig, type UserConfig } from './config.js';
 
 export interface Tool {
   name: string;
+  title?: string;  // Human-friendly display name (MCP 2025-11-25)
   description: string;
   inputSchema: z.ZodSchema;
+  outputSchema?: z.ZodSchema;  // Structured output schema (MCP 2025-11-25)
   requiresAuth: boolean;
   requiresWrite: boolean;
   annotations?: {
@@ -13,6 +15,11 @@ export interface Tool {
     destructiveHint?: boolean;
     idempotentHint?: boolean;
   };
+  icon?: {
+    type: 'base64' | 'url';
+    mediaType?: string;
+    data: string;
+  };  // Tool icon (MCP 2025-11-25)
   handler: (input: any, client: GitLabGraphQLClient, userConfig?: UserConfig) => Promise<any>;
 }
 
@@ -47,6 +54,7 @@ const withUserAuth = (baseSchema: z.ZodObject<any>, required = false) => {
 // Read-only tools (can use shared token)
 const getCurrentUserTool: Tool = {
   name: 'get_current_user',
+  title: 'Current User',
   description: 'Get information about the current authenticated GitLab user',
   requiresAuth: true,
   requiresWrite: false,
@@ -65,6 +73,7 @@ const getCurrentUserTool: Tool = {
 
 const getProjectTool: Tool = {
   name: 'get_project',
+  title: 'Project Details',
   description: 'Get detailed information about a specific GitLab project (read-only)',
   requiresAuth: false,
   requiresWrite: false,
@@ -85,6 +94,7 @@ const getProjectTool: Tool = {
 
 const getProjectsTool: Tool = {
   name: 'get_projects',
+  title: 'List Projects',
   description: 'List projects accessible to the user (requires authentication to see private projects)',
   requiresAuth: true,
   requiresWrite: false,
@@ -106,6 +116,7 @@ const getProjectsTool: Tool = {
 
 const getIssuesTool: Tool = {
   name: 'get_issues',
+  title: 'Project Issues',
   description: 'Get issues from a specific GitLab project (read-only)',
   requiresAuth: false,
   requiresWrite: false,
@@ -131,6 +142,7 @@ const getIssuesTool: Tool = {
 
 const getMergeRequestsTool: Tool = {
   name: 'get_merge_requests',
+  title: 'Merge Requests',
   description: 'Get merge requests from a specific GitLab project (read-only)',
   requiresAuth: false,
   requiresWrite: false,
@@ -157,6 +169,7 @@ const getMergeRequestsTool: Tool = {
 // Write operations (require user authentication)
 const createIssueTool: Tool = {
   name: 'create_issue',
+  title: 'Create Issue',
   description: 'Create a new issue in a GitLab project (requires user authentication with write permissions)',
   requiresAuth: true,
   requiresWrite: true,
@@ -186,6 +199,7 @@ const createIssueTool: Tool = {
 
 const createMergeRequestTool: Tool = {
   name: 'create_merge_request',
+  title: 'Create Merge Request',
   description: 'Create a new merge request in a GitLab project (requires user authentication with write permissions)',
   requiresAuth: true,
   requiresWrite: true,
@@ -225,6 +239,7 @@ const createMergeRequestTool: Tool = {
 // Advanced tools
 const executeCustomQueryTool: Tool = {
   name: 'execute_custom_query',
+  title: 'Custom GraphQL Query',
   description: 'Execute custom GraphQL queries for complex filtering (e.g., issues with assigneeUsernames: ["user"], labelName: ["bug"]). Use this for structured filtering by assignee/author/labels when search tools return 0 results. Use pagination and limit complexity to avoid timeouts.',
   requiresAuth: false,
   requiresWrite: false,
@@ -249,6 +264,7 @@ const executeCustomQueryTool: Tool = {
 
 const getAvailableQueriesTools: Tool = {
   name: 'get_available_queries',
+  title: 'Available Queries',
   description: 'Get list of available GraphQL queries and mutations from the GitLab schema',
   requiresAuth: false,
   requiresWrite: false,
@@ -288,6 +304,7 @@ export const writeTools: Tool[] = [
 
 const updateIssueTool: Tool = {
   name: 'update_issue',
+  title: 'Update Issue',
   description: 'Update an issue (title, description, assignees, labels, due date) with schema-aware mutations',
   requiresAuth: true,
   requiresWrite: true,
@@ -328,6 +345,7 @@ const updateIssueTool: Tool = {
 
 const updateMergeRequestTool: Tool = {
   name: 'update_merge_request',
+  title: 'Update Merge Request',
   description: 'Update a merge request (title, description, assignees, reviewers, labels) with schema-aware mutations',
   requiresAuth: true,
   requiresWrite: true,
@@ -369,6 +387,7 @@ const updateMergeRequestTool: Tool = {
 // Discovery/introspection tools
 const resolvePathTool: Tool = {
   name: 'resolve_path',
+  title: 'Resolve Path',
   description: 'Resolve a GitLab path to either a project or group and list group projects when applicable',
   requiresAuth: false,
   requiresWrite: false,
@@ -391,6 +410,7 @@ const resolvePathTool: Tool = {
 
 const getGroupProjectsTool: Tool = {
   name: 'get_group_projects',
+  title: 'Group Projects',
   description: 'List projects inside a GitLab group (optionally filter by search term)',
   requiresAuth: false,
   requiresWrite: false,
@@ -414,6 +434,7 @@ const getGroupProjectsTool: Tool = {
 
 const getTypeFieldsTool: Tool = {
   name: 'get_type_fields',
+  title: 'GraphQL Type Fields',
   description: 'List available fields on a GraphQL type using introspected schema (requires schema to be introspected)',
   requiresAuth: false,
   requiresWrite: false,
@@ -435,6 +456,7 @@ const getTypeFieldsTool: Tool = {
 // Search tools - comprehensive search capabilities for LLMs
 const globalSearchTool: Tool = {
   name: 'search_gitlab',
+  title: 'Search GitLab',
   description: 'Text search across GitLab projects and issues (Note: Does not support filtering by assignee/labels - use search_issues for that. MRs cannot be searched globally - use search_merge_requests with username)',
   requiresAuth: false,
   requiresWrite: false,
@@ -461,6 +483,7 @@ const globalSearchTool: Tool = {
 
 const searchProjectsTool: Tool = {
   name: 'search_projects',
+  title: 'Search Projects',
   description: 'Search for GitLab projects by name or description',
   requiresAuth: false,
   requiresWrite: false,
@@ -486,6 +509,7 @@ const searchProjectsTool: Tool = {
 
 const searchIssuesTool: Tool = {
   name: 'search_issues',
+  title: 'Search Issues',
   description: 'Search for issues with text search and/or structured filtering (assignee, author, labels, state). For filtering by assignee/author/labels without text search, leave searchTerm empty.',
   requiresAuth: false,
   requiresWrite: false,
@@ -542,6 +566,7 @@ const searchIssuesTool: Tool = {
 
 const searchMergeRequestsTool: Tool = {
   name: 'search_merge_requests',
+  title: 'Search Merge Requests',
   description: 'Search merge requests by username (supports "username", "author:username", "assignee:username") or search within a specific project. Note: GitLab does not support global text search for MRs - use projectPath for text searches.',
   requiresAuth: false,
   requiresWrite: false,
@@ -597,6 +622,7 @@ const searchMergeRequestsTool: Tool = {
 
 const searchUsersTool: Tool = {
   name: 'search_users',
+  title: 'Search Users',
   description: 'Search for GitLab users by username or name - useful for finding team members or contributors',
   requiresAuth: false,
   requiresWrite: false,
@@ -621,6 +647,7 @@ const searchUsersTool: Tool = {
 
 const searchGroupsTool: Tool = {
   name: 'search_groups',
+  title: 'Search Groups',
   description: 'Search for GitLab groups and organizations',
   requiresAuth: false,
   requiresWrite: false,
@@ -645,6 +672,7 @@ const searchGroupsTool: Tool = {
 
 const browseRepositoryTool: Tool = {
   name: 'browse_repository',
+  title: 'Browse Repository',
   description: 'Browse repository files and folders - essential for exploring codebase structure',
   requiresAuth: false,
   requiresWrite: false,
@@ -685,6 +713,7 @@ const browseRepositoryTool: Tool = {
 
 const getFileContentTool: Tool = {
   name: 'get_file_content',
+  title: 'File Content',
   description: 'Get the content of a specific file from a GitLab repository - crucial for code analysis',
   requiresAuth: false,
   requiresWrite: false,
@@ -727,6 +756,7 @@ const getFileContentTool: Tool = {
 // Helper functions for common user queries
 const getUserIssuesTool: Tool = {
   name: 'get_user_issues',
+  title: 'User Issues',
   description: 'Get all issues assigned to a specific user - uses proper GraphQL filtering for reliable results',
   requiresAuth: false,
   requiresWrite: false,
@@ -780,6 +810,7 @@ const getUserIssuesTool: Tool = {
 
 const getUserMergeRequestsTool: Tool = {
   name: 'get_user_merge_requests',
+  title: 'User Merge Requests',
   description: 'Get merge requests for a specific user (as author or assignee) - uses proper GraphQL filtering',
   requiresAuth: false,
   requiresWrite: false,

@@ -1,6 +1,6 @@
 {
   "name": "gitlab-mcp-server",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "GitLab MCP Server with GraphQL discovery",
   "main": "dist/index.js",
   "module": "./src/index.ts",
@@ -33,7 +33,7 @@
     "url": "https://github.com/ttpears/gitlab-mcp/issues"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.1",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@types/express": "^5.0.3",
     "express": "^5.1.0",
     "graphql": "^16.8.1",
