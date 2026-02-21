@@ -27,9 +27,10 @@ import { GitLabGraphQLClient } from './gitlab-client.js';
 import { tools } from './tools.js';
 
 class GitLabMCPServer {
-  private server: Server;
+  private server: Server | null = null; // Used only for stdio mode
   private gitlabClient!: GitLabGraphQLClient;
-  private httpTransports: Map<string, {
+  private httpSessions: Map<string, {
+    server: Server;
     transport: StreamableHTTPServerTransport;
     userConfig?: { accessToken: string; gitlabUrl?: string };
     lastActivity: number;
@@ -37,23 +38,6 @@ class GitLabMCPServer {
   private sessionCleanupInterval?: NodeJS.Timeout;
 
   constructor() {
-    this.server = new Server(
-      {
-        name: 'gitlab-mcp-server',
-        version: '1.7.0',
-      },
-      {
-        capabilities: {
-          tools: {},
-          prompts: {},
-        },
-      }
-    );
-
-    this.setupToolHandlers();
-    this.setupPromptHandlers();
-    this.setupErrorHandling();
-
     // Initialize GitLab client using environment configuration
     const config = loadConfig();
     this.gitlabClient = new GitLabGraphQLClient(config);
@@ -69,8 +53,35 @@ class GitLabMCPServer {
     }
   }
 
-  private setupToolHandlers(): void {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+  /**
+   * Create a new MCP Server instance with all handlers configured
+   */
+  private createServer(): Server {
+    const server = new Server(
+      {
+        name: 'gitlab-mcp-server',
+        version: '1.7.0',
+      },
+      {
+        capabilities: {
+          tools: {},
+          prompts: {},
+        },
+      }
+    );
+
+    this.setupToolHandlers(server);
+    this.setupPromptHandlers(server);
+
+    server.onerror = (error) => {
+      console.error('[MCP Error]', error);
+    };
+
+    return server;
+  }
+
+  private setupToolHandlers(server: Server): void {
+    server.setRequestHandler(ListToolsRequestSchema, async () => {
       return {
         tools: tools.map(tool => ({
           name: tool.name,
@@ -84,7 +95,7 @@ class GitLabMCPServer {
       };
     });
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name, arguments: args } = request.params;
 
       const tool = tools.find(t => t.name === name);
@@ -100,7 +111,7 @@ class GitLabMCPServer {
 
         // If no credentials in args, try to get from session context
         if (!userConfig && extra?._meta?.sessionId) {
-          const sessionData = this.httpTransports.get(extra._meta.sessionId as string);
+          const sessionData = this.httpSessions.get(extra._meta.sessionId as string);
           if (sessionData?.userConfig) {
             userConfig = sessionData.userConfig;
           }
@@ -127,7 +138,7 @@ class GitLabMCPServer {
     });
   }
 
-  private setupPromptHandlers(): void {
+  private setupPromptHandlers(server: Server): void {
     // Define helpful prompts for common GitLab workflows
     const prompts = [
       {
@@ -167,11 +178,11 @@ class GitLabMCPServer {
       },
     ];
 
-    this.server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    server.setRequestHandler(ListPromptsRequestSchema, async () => {
       return { prompts };
     });
 
-    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    server.setRequestHandler(GetPromptRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
 
       if (name === 'explore-project') {
@@ -241,16 +252,24 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
     });
   }
 
-  private setupErrorHandling(): void {
-    this.server.onerror = (error) => {
-      console.error('[MCP Error]', error);
-    };
-
+  private setupProcessHandlers(): void {
     process.on('SIGINT', async () => {
       if (this.sessionCleanupInterval) {
         clearInterval(this.sessionCleanupInterval);
       }
-      await this.server.close();
+      // Close all HTTP sessions
+      for (const [sessionId, data] of this.httpSessions.entries()) {
+        try {
+          await data.server.close();
+        } catch (e) {
+          // Ignore errors during shutdown
+        }
+      }
+      this.httpSessions.clear();
+      // Close stdio server if running
+      if (this.server) {
+        await this.server.close();
+      }
       process.exit(0);
     });
   }
@@ -266,23 +285,24 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
       const now = Date.now();
       const expiredSessions: string[] = [];
 
-      for (const [sessionId, data] of this.httpTransports.entries()) {
+      for (const [sessionId, data] of this.httpSessions.entries()) {
         if (now - data.lastActivity > SESSION_TIMEOUT) {
           expiredSessions.push(sessionId);
         }
       }
 
       for (const sessionId of expiredSessions) {
-        const data = this.httpTransports.get(sessionId);
+        const data = this.httpSessions.get(sessionId);
         if (data) {
           console.error(`[MCP] Session ${sessionId} expired due to inactivity`);
+          data.server.close().catch(() => {});
           data.transport.close().catch(() => {});
-          this.httpTransports.delete(sessionId);
+          this.httpSessions.delete(sessionId);
         }
       }
 
       if (expiredSessions.length > 0) {
-        console.error(`[MCP] Cleaned up ${expiredSessions.length} expired session(s). Active sessions: ${this.httpTransports.size}`);
+        console.error(`[MCP] Cleaned up ${expiredSessions.length} expired session(s). Active sessions: ${this.httpSessions.size}`);
       }
     }, CLEANUP_INTERVAL);
   }
@@ -341,9 +361,9 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
 
       console.error(`[MCP] Request: ${req.method} session=${sessionIdHeader || 'none'} body=${bodyPreview}`);
 
-      if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
+      if (sessionIdHeader && this.httpSessions.has(sessionIdHeader)) {
         // Existing session: reuse transport and update credentials
-        const sessionData = this.httpTransports.get(sessionIdHeader)!;
+        const sessionData = this.httpSessions.get(sessionIdHeader)!;
         const userConfig = this.extractUserCredentials(req);
 
         // Update session-specific credentials if provided
@@ -362,12 +382,12 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
       // New session initialization
       if (req.method === 'POST') {
         // If we have too many sessions, clean up old ones immediately
-        if (this.httpTransports.size > 10) {
+        if (this.httpSessions.size > 10) {
           const now = Date.now();
           const oldSessions: string[] = [];
 
           // Find sessions older than 5 minutes
-          for (const [sessionId, data] of this.httpTransports.entries()) {
+          for (const [sessionId, data] of this.httpSessions.entries()) {
             if (now - data.lastActivity > 5 * 60 * 1000) {
               oldSessions.push(sessionId);
             }
@@ -375,36 +395,45 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
 
           // Close and remove old sessions
           for (const sessionId of oldSessions) {
-            const data = this.httpTransports.get(sessionId);
+            const data = this.httpSessions.get(sessionId);
             if (data) {
               console.error(`[MCP] Force-closing old session ${sessionId}`);
+              data.server.close().catch(() => {});
               data.transport.close().catch(() => {});
-              this.httpTransports.delete(sessionId);
+              this.httpSessions.delete(sessionId);
             }
           }
 
           if (oldSessions.length > 0) {
-            console.error(`[MCP] Emergency cleanup: removed ${oldSessions.length} old sessions (total now: ${this.httpTransports.size})`);
+            console.error(`[MCP] Emergency cleanup: removed ${oldSessions.length} old sessions (total now: ${this.httpSessions.size})`);
           }
         }
+
+        // Create a new Server instance for this session
+        const server = this.createServer();
 
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sessionId: string) => {
             const userConfig = this.extractUserCredentials(req);
-            this.httpTransports.set(sessionId, {
+            this.httpSessions.set(sessionId, {
+              server,
               transport,
               userConfig,
               lastActivity: Date.now()
             });
-            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'shared'} credentials (total sessions: ${this.httpTransports.size})`);
+            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'shared'} credentials (total sessions: ${this.httpSessions.size})`);
           },
         });
 
         transport.onclose = () => {
           if (transport.sessionId) {
-            console.error(`[MCP] Session ${transport.sessionId} closed (remaining sessions: ${this.httpTransports.size - 1})`);
-            this.httpTransports.delete(transport.sessionId);
+            console.error(`[MCP] Session ${transport.sessionId} closed (remaining sessions: ${this.httpSessions.size - 1})`);
+            const sessionData = this.httpSessions.get(transport.sessionId);
+            if (sessionData) {
+              sessionData.server.close().catch(() => {});
+            }
+            this.httpSessions.delete(transport.sessionId);
           }
         };
 
@@ -413,7 +442,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           console.error(`[MCP] Transport error for session ${transport.sessionId}:`, error.message);
         };
 
-        await this.server.connect(transport);
+        await server.connect(transport);
         await transport.handleRequest(req as any, res as any, (req as any).body);
         return;
       }
@@ -509,10 +538,11 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
         // DELETE support for explicit session termination (per MCP spec)
         app.delete('/', async (req, res) => {
           const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
-          if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
-            const sessionData = this.httpTransports.get(sessionIdHeader)!;
+          if (sessionIdHeader && this.httpSessions.has(sessionIdHeader)) {
+            const sessionData = this.httpSessions.get(sessionIdHeader)!;
+            await sessionData.server.close();
             await sessionData.transport.close();
-            this.httpTransports.delete(sessionIdHeader);
+            this.httpSessions.delete(sessionIdHeader);
             console.error(`[MCP] Session ${sessionIdHeader} terminated by client`);
             res.sendStatus(200);
           } else {
@@ -526,10 +556,11 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
 
         app.delete('/mcp', async (req, res) => {
           const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
-          if (sessionIdHeader && this.httpTransports.has(sessionIdHeader)) {
-            const sessionData = this.httpTransports.get(sessionIdHeader)!;
+          if (sessionIdHeader && this.httpSessions.has(sessionIdHeader)) {
+            const sessionData = this.httpSessions.get(sessionIdHeader)!;
+            await sessionData.server.close();
             await sessionData.transport.close();
-            this.httpTransports.delete(sessionIdHeader);
+            this.httpSessions.delete(sessionIdHeader);
             console.error(`[MCP] Session ${sessionIdHeader} terminated by client`);
             res.sendStatus(200);
           } else {
@@ -562,9 +593,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           res.json({
             status: 'healthy',
             timestamp: new Date().toISOString(),
-            transports: {
-              streamableHttp: this.httpTransports.size
-            },
+            sessions: this.httpSessions.size,
             protocol: '2025-11-25'
           });
         });
@@ -607,9 +636,14 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
         console.error('Tip: Set GITLAB_MCP_PORT to enable HTTP mode for LibreChat');
         console.error('='.repeat(60));
 
+        // Create server for stdio mode
+        this.server = this.createServer();
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
       }
+
+      // Setup process signal handlers
+      this.setupProcessHandlers();
     } catch (error) {
       console.error('Failed to start server:', error);
       process.exit(1);
@@ -621,10 +655,10 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
 // This factory prepares the server with all handlers but does not bind transports.
 export default function createMcpServer(_args: { sessionId: string; config: unknown }): Server {
   const instance = new GitLabMCPServer();
-  // Return the underlying MCP Server; the host (e.g., Smithery) will call connect(transport)
+  // Create and return a new Server instance; the host (e.g., Smithery) will call connect(transport)
   // and manage the Streamable HTTP session lifecycle.
   // @ts-ignore accessing private for integration factory
-  return (instance as any)["server"] as Server;
+  return (instance as any).createServer() as Server;
 }
 
 // Optional: expose a (currently empty) config schema for /.well-known/mcp-config
