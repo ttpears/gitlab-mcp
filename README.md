@@ -30,6 +30,12 @@ GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/mo
 | **Work item notes** | Yes | Yes |
 | **Semantic code search** | No | Yes (requires additional setup) |
 | **Label search** | Yes | Yes |
+| **Milestone tracking** | Yes | No |
+| **Iteration/sprint tracking** | Yes | No |
+| **Time tracking & timelogs** | Yes | No |
+| **MR reviewer & approval status** | Yes | No |
+| **Project statistics dashboard** | Yes | No |
+| **Group member listing** | Yes | No |
 
 **Choose this server** if you're on GitLab Free/Community Edition, need GraphQL flexibility, want repo browsing, or run LibreChat multi-user deployments.
 
@@ -145,6 +151,7 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 | `search_users` | Find team members and contributors |
 | `search_groups` | Discover groups and organizations |
 | `search_labels` | Search labels in a project or group |
+| `list_group_members` | List group members with access levels |
 | `browse_repository` | Explore directory structure and files |
 | `get_file_content` | Read file contents for code analysis |
 
@@ -159,6 +166,11 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 | `get_merge_request_diffs` | Get diff statistics for a merge request |
 | `get_merge_request_commits` | Get commits for a merge request |
 | `get_notes` | Get notes/comments on an issue or merge request |
+| `list_milestones` | List milestones with progress statistics |
+| `list_iterations` | List iterations/sprints (Premium/Ultimate) |
+| `get_time_tracking` | Get time estimate, spent, and timelogs |
+| `get_merge_request_reviewers` | Get MR approval and reviewer status |
+| `get_project_statistics` | Aggregate project stats dashboard |
 | `get_user_issues` | Get all issues assigned to a user |
 | `get_user_merge_requests` | Get MRs authored by or assigned to a user |
 | `resolve_path` | Resolve a path to a project or group |
