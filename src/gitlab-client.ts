@@ -1585,6 +1585,336 @@ export class GitLabGraphQLClient {
     return result.createNote;
   }
 
+  // ── Milestones ─────────────────────────────────────────────────────
+
+  async listMilestones(
+    fullPath: string,
+    isProject: boolean,
+    state?: string,
+    search?: string,
+    includeAncestors: boolean = false,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const milestoneFields = `
+      pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+      nodes {
+        id
+        iid
+        title
+        description
+        state
+        dueDate
+        startDate
+        expired
+        upcoming
+        webPath
+        stats {
+          totalIssuesCount
+          closedIssuesCount
+        }
+        createdAt
+        updatedAt
+      }
+    `;
+
+    if (isProject) {
+      const query = gql`
+        query listProjectMilestones($fullPath: ID!, $state: MilestoneStateEnum, $searchTitle: String, $includeAncestors: Boolean, $first: Int!, $after: String) {
+          project(fullPath: $fullPath) {
+            milestones(state: $state, searchTitle: $searchTitle, includeAncestors: $includeAncestors, first: $first, after: $after) {
+              ${milestoneFields}
+            }
+          }
+        }
+      `;
+      return this.query(query, {
+        fullPath,
+        state: state?.toLowerCase(),
+        searchTitle: search,
+        includeAncestors,
+        first: Math.min(first, 50),
+        after,
+      }, userConfig);
+    } else {
+      const query = gql`
+        query listGroupMilestones($fullPath: ID!, $state: MilestoneStateEnum, $searchTitle: String, $includeAncestors: Boolean, $first: Int!, $after: String) {
+          group(fullPath: $fullPath) {
+            milestones(state: $state, searchTitle: $searchTitle, includeAncestors: $includeAncestors, first: $first, after: $after) {
+              ${milestoneFields}
+            }
+          }
+        }
+      `;
+      return this.query(query, {
+        fullPath,
+        state: state?.toLowerCase(),
+        searchTitle: search,
+        includeAncestors,
+        first: Math.min(first, 50),
+        after,
+      }, userConfig);
+    }
+  }
+
+  // ── Iterations ────────────────────────────────────────────────────
+
+  async listIterations(
+    groupPath: string,
+    state?: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query listIterations($groupPath: ID!, $state: IterationState, $first: Int!, $after: String) {
+        group(fullPath: $groupPath) {
+          iterations(state: $state, first: $first, after: $after) {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes {
+              id
+              iid
+              title
+              description
+              state
+              startDate
+              dueDate
+              webUrl
+              scopedPath
+              iterationCadence {
+                id
+                title
+                active
+                durationInWeeks
+              }
+              createdAt
+              updatedAt
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, {
+      groupPath,
+      state: state?.toLowerCase(),
+      first: Math.min(first, 50),
+      after,
+    }, userConfig);
+  }
+
+  // ── Time Tracking ─────────────────────────────────────────────────
+
+  async getTimeTracking(
+    projectPath: string,
+    resourceType: 'issue' | 'merge_request',
+    iid: string,
+    includeTimelogs: boolean = true,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const timelogFields = includeTimelogs ? `
+      timelogs(first: $first, after: $after) {
+        pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+        nodes {
+          id
+          timeSpent
+          summary
+          spentAt
+          user {
+            username
+            name
+          }
+        }
+      }
+    ` : '';
+
+    if (resourceType === 'issue') {
+      const query = gql`
+        query getIssueTimeTracking($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+          project(fullPath: $projectPath) {
+            issue(iid: $iid) {
+              iid
+              title
+              webUrl
+              timeEstimate
+              totalTimeSpent
+              humanTimeEstimate
+              humanTotalTimeSpent
+              ${timelogFields}
+            }
+          }
+        }
+      `;
+      return this.query(query, { projectPath, iid, first: Math.min(first, 50), after }, userConfig);
+    } else {
+      const query = gql`
+        query getMergeRequestTimeTracking($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+          project(fullPath: $projectPath) {
+            mergeRequest(iid: $iid) {
+              iid
+              title
+              webUrl
+              timeEstimate
+              totalTimeSpent
+              humanTimeEstimate
+              humanTotalTimeSpent
+              ${timelogFields}
+            }
+          }
+        }
+      `;
+      return this.query(query, { projectPath, iid, first: Math.min(first, 50), after }, userConfig);
+    }
+  }
+
+  // ── MR Reviewers & Approvals ──────────────────────────────────────
+
+  async getMergeRequestReviewers(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestReviewers($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            iid
+            title
+            webUrl
+            state
+            approved
+            approvalsRequired
+            approvalsLeft
+            approvedBy {
+              nodes {
+                username
+                name
+                avatarUrl
+                webUrl
+              }
+            }
+            reviewers {
+              nodes {
+                username
+                name
+                avatarUrl
+                webUrl
+                mergeRequestInteraction {
+                  reviewState
+                  approved
+                  reviewed
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { projectPath, iid }, userConfig);
+  }
+
+  // ── Project Statistics ────────────────────────────────────────────
+
+  async getProjectStatistics(
+    projectPath: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getProjectStatistics($projectPath: ID!) {
+        project(fullPath: $projectPath) {
+          id
+          name
+          fullPath
+          webUrl
+          starCount
+          forksCount
+          openIssuesCount
+          statistics {
+            repositorySize
+            lfsObjectsSize
+            buildArtifactsSize
+            packagesSize
+            wikiSize
+            snippetsSize
+            uploadsSize
+            containerRegistrySize
+            commitCount
+          }
+          openMergeRequests: mergeRequests(state: opened) {
+            count
+          }
+          lastPipeline: pipelines(first: 1) {
+            nodes {
+              id
+              iid
+              status
+              createdAt
+              finishedAt
+              ref
+              detailedStatus {
+                text
+                label
+              }
+            }
+          }
+          releaseCount: releases {
+            count
+          }
+          languages {
+            name
+            share
+            color
+          }
+        }
+      }
+    `;
+    return this.query(query, { projectPath }, userConfig);
+  }
+
+  // ── Group Members ─────────────────────────────────────────────────
+
+  async listGroupMembers(
+    groupPath: string,
+    search?: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query listGroupMembers($groupPath: ID!, $search: String, $first: Int!, $after: String) {
+        group(fullPath: $groupPath) {
+          groupMembers(search: $search, first: $first, after: $after) {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes {
+              id
+              accessLevel {
+                stringValue
+                integerValue
+              }
+              createdAt
+              expiresAt
+              user {
+                username
+                name
+                avatarUrl
+                webUrl
+                state
+              }
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, {
+      groupPath,
+      search: search || undefined,
+      first: Math.min(first, 50),
+      after,
+    }, userConfig);
+  }
+
   // ── Label Search ─────────────────────────────────────────────────────
 
   async searchLabels(

@@ -941,6 +941,215 @@ const createNoteTool: Tool = {
   },
 };
 
+// ── Project Tracking & User Reporting tools ─────────────────────────
+
+const listMilestonesTool: Tool = {
+  name: 'list_milestones',
+  title: 'Milestones',
+  description: 'List milestones for a project or group with progress statistics (total/closed issue counts)',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    fullPath: z.string().describe('Full path of the project or group (e.g., "group/project-name" or "group")'),
+    isProject: z.boolean().describe('Whether the path is a project (true) or group (false)'),
+    state: z.string().optional().describe('Filter by state: active, closed (omit for all)'),
+    search: z.string().optional().describe('Search milestones by title'),
+    includeAncestors: z.boolean().default(false).describe('Include milestones from ancestor groups'),
+    first: z.number().min(1).max(100).default(20).describe('Number of milestones to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.listMilestones(
+      input.fullPath, input.isProject, input.state, input.search,
+      input.includeAncestors, input.first, input.after, credentials
+    );
+    const container = input.isProject ? result?.project : result?.group;
+    if (!container) {
+      throw new Error(`${input.isProject ? 'Project' : 'Group'} not found: ${input.fullPath}`);
+    }
+    return container.milestones;
+  },
+};
+
+const listIterationsTool: Tool = {
+  name: 'list_iterations',
+  title: 'Iterations',
+  description: 'List iterations (sprints) for a group with cadence info. Requires GitLab Premium/Ultimate.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    groupPath: z.string().describe('Full path of the group (e.g., "my-group" or "parent/child-group")'),
+    state: z.string().optional().describe('Filter by state: upcoming, current, opened, closed (omit for all)'),
+    first: z.number().min(1).max(100).default(20).describe('Number of iterations to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    try {
+      const result = await client.listIterations(input.groupPath, input.state, input.first, input.after, credentials);
+      if (!result?.group) {
+        throw new Error(`Group not found: ${input.groupPath}`);
+      }
+      return result.group.iterations;
+    } catch (error: any) {
+      if (error.message?.includes('iterations') || error.message?.includes('does not exist')) {
+        throw new Error(
+          `Iterations are not available for "${input.groupPath}". ` +
+          `This feature requires GitLab Premium or Ultimate. ` +
+          `Original error: ${error.message}`
+        );
+      }
+      throw error;
+    }
+  },
+};
+
+const getTimeTrackingTool: Tool = {
+  name: 'get_time_tracking',
+  title: 'Time Tracking',
+  description: 'Get time tracking data (estimate, spent, timelogs) for an issue or merge request',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    resourceType: z.enum(['issue', 'merge_request']).describe('Type of resource to get time tracking for'),
+    iid: z.string().describe('Issue or merge request IID'),
+    includeTimelogs: z.boolean().default(true).describe('Whether to include individual timelog entries'),
+    first: z.number().min(1).max(100).default(20).describe('Number of timelog entries to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getTimeTracking(
+      input.projectPath, input.resourceType, input.iid,
+      input.includeTimelogs, input.first, input.after, credentials
+    );
+    const resource = input.resourceType === 'issue'
+      ? result?.project?.issue
+      : result?.project?.mergeRequest;
+    if (!resource) {
+      throw new Error(`${input.resourceType === 'issue' ? 'Issue' : 'Merge request'} not found`);
+    }
+    return resource;
+  },
+};
+
+const getMergeRequestReviewersTool: Tool = {
+  name: 'get_merge_request_reviewers',
+  title: 'MR Reviewers',
+  description: 'Get approval and reviewer status for a merge request, including who approved and review states',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getMergeRequestReviewers(input.projectPath, input.iid, credentials);
+    if (!result?.project?.mergeRequest) {
+      throw new Error('Merge request not found');
+    }
+    return result.project.mergeRequest;
+  },
+};
+
+const getProjectStatisticsTool: Tool = {
+  name: 'get_project_statistics',
+  title: 'Project Statistics',
+  description: 'Get aggregate project statistics: open issues/MRs, star/fork counts, storage sizes, commit count, last pipeline status, release count, and language breakdown',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getProjectStatistics(input.projectPath, credentials);
+    if (!result?.project) {
+      throw new Error(`Project not found: ${input.projectPath}`);
+    }
+    const p = result.project;
+    return {
+      id: p.id,
+      name: p.name,
+      fullPath: p.fullPath,
+      webUrl: p.webUrl,
+      starCount: p.starCount,
+      forksCount: p.forksCount,
+      openIssuesCount: p.openIssuesCount,
+      openMergeRequestsCount: p.openMergeRequests?.count ?? null,
+      commitCount: p.statistics?.commitCount ?? null,
+      storage: p.statistics ? {
+        repositorySize: p.statistics.repositorySize,
+        lfsObjectsSize: p.statistics.lfsObjectsSize,
+        buildArtifactsSize: p.statistics.buildArtifactsSize,
+        packagesSize: p.statistics.packagesSize,
+        wikiSize: p.statistics.wikiSize,
+        snippetsSize: p.statistics.snippetsSize,
+        uploadsSize: p.statistics.uploadsSize,
+        containerRegistrySize: p.statistics.containerRegistrySize,
+      } : null,
+      lastPipeline: p.lastPipeline?.nodes?.[0] ?? null,
+      releaseCount: p.releaseCount?.count ?? null,
+      languages: p.languages ?? [],
+    };
+  },
+};
+
+const listGroupMembersTool: Tool = {
+  name: 'list_group_members',
+  title: 'Group Members',
+  description: 'List group members with access levels, optionally filtered by search term',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    groupPath: z.string().describe('Full path of the group (e.g., "my-group" or "parent/child-group")'),
+    search: z.string().optional().describe('Optional search term to filter members by name or username'),
+    first: z.number().min(1).max(100).default(20).describe('Number of members to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.listGroupMembers(input.groupPath, input.search, input.first, input.after, credentials);
+    if (!result?.group) {
+      throw new Error(`Group not found: ${input.groupPath}`);
+    }
+    return result.group.groupMembers;
+  },
+};
+
 // Label Search tool
 const searchLabelsTool: Tool = {
   name: 'search_labels',
@@ -1093,6 +1302,11 @@ export const readOnlyTools: Tool[] = [
   getMergeRequestDiffsTool,
   getMergeRequestCommitsTool,
   getNotesTool,
+  listMilestonesTool,
+  listIterationsTool,
+  getTimeTrackingTool,
+  getMergeRequestReviewersTool,
+  getProjectStatisticsTool,
 ];
 
 export const userAuthTools: Tool[] = [
@@ -1119,6 +1333,7 @@ export const searchTools: Tool[] = [
   searchLabelsTool,
   browseRepositoryTool,
   getFileContentTool,
+  listGroupMembersTool,
 ];
 
 export const tools: Tool[] = [
