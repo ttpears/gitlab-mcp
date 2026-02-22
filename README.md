@@ -3,11 +3,39 @@
 [![npm version](https://img.shields.io/npm/v/@ttpears/gitlab-mcp-server)](https://www.npmjs.com/package/@ttpears/gitlab-mcp-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Model Context Protocol (MCP) server for GitLab with GraphQL schema discovery, self-hosted instance support, and multi-client compatibility.
+A community MCP server for GitLab — works with **any GitLab tier** (Free, Premium, Ultimate), no GitLab Duo required.
 
 ```bash
 npx @ttpears/gitlab-mcp-server
 ```
+
+## How This Differs from GitLab's Official MCP Server
+
+GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/) (Beta) that requires **Premium/Ultimate** and **GitLab Duo** with beta features enabled. This community server is an alternative for teams that don't have those requirements or need different capabilities.
+
+| | This server | GitLab official |
+|---|---|---|
+| **GitLab tier** | Free, Premium, Ultimate | Premium / Ultimate only |
+| **GitLab Duo required** | No | Yes |
+| **Auth** | Personal Access Token | OAuth 2.0 Dynamic Client Registration |
+| **Transport** | stdio + streamable HTTP | stdio (via `mcp-remote`) + HTTP |
+| **Multi-client** | Claude Code, LibreChat, any MCP client | Claude Desktop, Claude Code, Cursor, VS Code |
+| **Multi-user auth modes** | hybrid / shared / per-user | OAuth per-user |
+| **GraphQL schema discovery** | Yes — introspect & run custom queries | No |
+| **Repository browsing & file reading** | Yes | No |
+| **User / group search** | Yes | No |
+| **Update issues & MRs** | Yes | No (create only) |
+| **CI/CD pipeline management** | No | Yes |
+| **MR diffs & commits** | No | Yes |
+| **Work item notes** | No | Yes |
+| **Semantic code search** | No | Yes (requires additional setup) |
+| **Label search** | No | Yes |
+
+**Choose this server** if you're on GitLab Free/Community Edition, need GraphQL flexibility, want repo browsing, or run LibreChat multi-user deployments.
+
+**Choose the official server** if you have GitLab Premium/Ultimate with Duo, need CI/CD pipeline tools, or prefer OAuth over PATs.
+
+---
 
 ## Quick Start
 
