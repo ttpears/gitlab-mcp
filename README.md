@@ -3,25 +3,29 @@
 [![npm version](https://img.shields.io/npm/v/@ttpears/gitlab-mcp-server)](https://www.npmjs.com/package/@ttpears/gitlab-mcp-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with automatic schema discovery and supports self-hosted GitLab instances. **Perfect for LLM-powered GitLab exploration and analysis.**
+A Model Context Protocol (MCP) server for GitLab with GraphQL schema discovery, self-hosted instance support, and multi-client compatibility.
 
 ```bash
 npx @ttpears/gitlab-mcp-server
 ```
 
-## ⚡ Quick Start (Claude Desktop & Claude Code)
+## Quick Start
 
-The fastest way to get started with GitLab MCP:
+### 1. Create a GitLab Token
 
-### 1. Get Your GitLab Token
-Create a GitLab Personal Access Token with `read_api` or `api` scope:
-- Go to GitLab → **User Settings** → **Access Tokens**
-- Create token with appropriate scope
-- Copy the token (e.g., `glpat-xxxxxxxxxxxx`)
+Go to GitLab → **User Settings** → **Access Tokens** → create a token with `read_api` (read-only) or `api` (full access) scope.
 
-### 2. Configure Claude Desktop or Claude Code
+### 2. Choose Your Client
 
-**For Claude Desktop** - Add to `claude_desktop_config.json`:
+- [Claude Code](#claude-code) — stdio transport, single-user
+- [LibreChat (Docker)](#librechat-docker) — streamable HTTP, multi-user with per-user auth
+
+---
+
+## Claude Code
+
+Add to your Claude Code settings (`.claude/settings.json` or project `.mcp.json`):
+
 ```json
 {
   "mcpServers": {
@@ -30,110 +34,33 @@ Create a GitLab Personal Access Token with `read_api` or `api` scope:
       "args": ["-y", "@ttpears/gitlab-mcp-server"],
       "env": {
         "GITLAB_URL": "https://gitlab.com",
-        "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here",
-        "GITLAB_AUTH_MODE": "hybrid"
+        "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here"
       }
     }
   }
 }
 ```
 
-**For Claude Code CLI** - Add to `.clauderc`:
-```json
-{
-  "mcpServers": {
-    "gitlab": {
-      "command": "npx",
-      "args": ["-y", "@ttpears/gitlab-mcp-server"],
-      "env": {
-        "GITLAB_URL": "https://gitlab.com",
-        "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here",
-        "GITLAB_AUTH_MODE": "hybrid"
-      }
-    }
-  }
-}
-```
+Restart Claude Code to load the server.
 
-### 3. Restart Claude
-Restart Claude Desktop or Claude Code to load the GitLab MCP server.
+---
 
-### 4. Test It
-Try asking Claude:
-- "Search for issues in project X"
-- "Show me recent merge requests"
-- "Browse the repository structure of project Y"
+## LibreChat (Docker)
 
-### 🔍 Test with MCP Inspector
-Test your configuration before using it with Claude:
+Runs as a sidecar container using [streamable HTTP transport](https://www.librechat.ai/docs/features/mcp) for multi-user deployments with per-user credential isolation.
+
+### 1. Add environment variables to your LibreChat `.env`:
 
 ```bash
-# Test with MCP Inspector (interactive UI)
-npx @modelcontextprotocol/inspector npx @ttpears/gitlab-mcp-server
-```
-
-Set environment variables when prompted or create `mcp-inspector.example.json`:
-```json
-{
-  "command": "npx",
-  "args": ["-y", "@ttpears/gitlab-mcp-server"],
-  "env": {
-    "GITLAB_URL": "https://gitlab.com",
-    "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-test-token"
-  }
-}
-```
-
-## ✨ **Key Features for LLMs**
-
-- 🔍 **Comprehensive Search**: Global search across projects, issues, merge requests, users, and groups
-- 📂 **Code Exploration**: Browse repository structure and read file contents
-- 🤝 **Dual Authentication**: Shared read-only access + per-user authentication for write operations
-- 🧠 **LLM-Optimized**: Tools designed specifically for AI analysis and exploration
-- 🔄 **GraphQL Discovery**: Automatic schema introspection for dynamic capabilities
-- 🔒 **Session Isolation**: Per-session credential management prevents cross-user data leaks
-
-## Features
-
-- **Search & Discovery**: Global search, project search, issue/MR search, code browsing
-- **GraphQL-first approach** with automatic schema introspection
-- **Self-hosted GitLab support** with configurable base URLs
-- **Comprehensive GitLab operations** (projects, issues, merge requests)
-- **Custom query execution** for advanced use cases
-- **Docker & LibreChat integration** ready
-- **Smithery install support** for easy deployment
-
-## Installation
-
-### 📁 **File Structure Note**
-- **`Dockerfile`** - Standard Dockerfile (copy as `Dockerfile.mcp-gitlab` for LibreChat integration)
-- **`smithery.yaml`** - Smithery.ai configuration with both stdio and Docker integration options
-
-### Docker (Recommended for LibreChat)
-
-The Dockerfile automatically clones and builds the GitLab MCP server from this repository, so you don't need to copy any source files - just the Dockerfile itself.
-
-1. **Copy Dockerfile to your LibreChat directory:**
-```bash
-# Copy the Dockerfile for LibreChat integration
-cp Dockerfile /path/to/librechat/Dockerfile.mcp-gitlab
-```
-
-**Note:** The Dockerfile uses `git clone` to fetch the source code, so it won't accidentally copy LibreChat files. You can specify which version to build using the `GITLAB_MCP_VERSION` build arg (defaults to `main`).
-
-2. **Add GitLab environment variables to your LibreChat `.env` file:**
-```bash
-# GitLab MCP Configuration
 GITLAB_URL=https://gitlab.com
 GITLAB_AUTH_MODE=hybrid
-GITLAB_SHARED_ACCESS_TOKEN=your-optional-shared-token
-GITLAB_MAX_PAGE_SIZE=50
-GITLAB_TIMEOUT=30000
+GITLAB_SHARED_ACCESS_TOKEN=glpat-your-shared-token
 GITLAB_MCP_PORT=8008
 MCP_TRANSPORT=http
 ```
 
-3. **Add service to your LibreChat `docker-compose.override.yml`:**
+### 2. Add the service to `docker-compose.override.yml`:
+
 ```yaml
 services:
   gitlab-mcp:
@@ -149,377 +76,10 @@ services:
     restart: unless-stopped
 ```
 
-4. **Configure in your LibreChat `librechat.yml`:**
-```yaml
-mcpServers:
-  gitlab:
-    type: streamable-http
-    url: "http://localhost:8008/"
-    headers:
-      Authorization: "Bearer {{GITLAB_PAT}}"
-      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
-    customUserVars:
-      GITLAB_PAT:
-        title: "GitLab Personal Access Token"
-        description: "PAT with api scope"
-      GITLAB_URL_OVERRIDE:
-        title: "GitLab URL (optional)"
-        description: "e.g., https://gitlab.yourdomain.com"
-```
+Copy the Dockerfile from this repo into your LibreChat directory as `Dockerfile.mcp-gitlab`. It clones and builds from this repository automatically — no source files needed.
 
-5. **Restart LibreChat:**
-```bash
-docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
-```
+### 3. Configure in `librechat.yml`:
 
-### Smithery.ai (Recommended for Easy Installation)
-
-1. **Visit [smithery.ai](https://smithery.ai)**
-2. **Search for "gitlab-mcp-server"**
-3. **Select the server** from search results
-4. **Navigate to the "Auto" tab** and select "LibreChat"
-5. **Copy and run** the generated installation command:
-   ```bash
-   # Example command (actual command from Smithery)
-   npx @smithery/cli install @ttpears/gitlab-mcp-server
-   ```
-6. **Configure in your `librechat.yml`** (Smithery will provide the exact configuration):
-   ```yaml
-   mcpServers:
-     gitlab:
-       command: npx
-       args: ["@ttpears/gitlab-mcp-server"]
-       type: stdio
-       env:
-         GITLAB_URL: "https://gitlab.com"
-         GITLAB_AUTH_MODE: "hybrid"
-         GITLAB_SHARED_ACCESS_TOKEN: "${GITLAB_SHARED_ACCESS_TOKEN:-}"
-       customUserVars:
-         GITLAB_ACCESS_TOKEN:
-           title: "GitLab Personal Access Token"
-           description: "Your GitLab PAT with 'api' or 'read_api' scope"
-           type: password
-           required: false
-   ```
-7. **Restart LibreChat** to initialize the server connection
-
-### Manual Installation
-
-1. Clone and build:
-```bash
-git clone <repository-url>
-cd gitlab-mcp
-npm install
-npm run build
-```
-
-2. Run the server:
-```bash
-GITLAB_URL=https://your-gitlab.com GITLAB_ACCESS_TOKEN=your-token npm start
-```
-
-## Configuration
-
-### Authentication Modes
-
-The server supports three authentication modes:
-
-#### 1. **Hybrid Mode (Recommended)**
-- **Shared token**: Optional read-only token for public operations
-- **Per-user auth**: Users provide their own tokens for private data and write operations
-- **Best for**: LibreChat deployments where you want to provide basic GitLab access but allow users to authenticate for full functionality
-
-#### 2. **Per-User Only Mode**
-- All operations require user authentication
-- **Best for**: High-security environments where no shared credentials are allowed
-
-#### 3. **Shared Only Mode**
-- Uses only the shared token for all operations
-- No per-user authentication supported
-- **Best for**: Single-user or trusted environments
-
-#### Authentication Mode Comparison
-
-| Mode | stdio (Claude Desktop/Code) | HTTP (LibreChat) | Use Case |
-|------|----------------------------|------------------|----------|
-| **hybrid** (default) | Uses `GITLAB_SHARED_ACCESS_TOKEN` from env + optional per-user PAT | Session headers + user credentials | Recommended for most deployments |
-| **shared** | Uses only `GITLAB_SHARED_ACCESS_TOKEN` from env | Uses only shared token | Single-user environments |
-| **per-user** | Requires PAT in env or tool args | Requires user PAT in session | Maximum security, multi-user |
-
-### Environment Variables
-
-| Variable | Description | Default | Auth Mode |
-|----------|-------------|---------|-----------|
-| `GITLAB_URL` | GitLab instance URL | `https://gitlab.com` | All |
-| `GITLAB_AUTH_MODE` | Authentication mode | `hybrid` | All |
-| `GITLAB_SHARED_ACCESS_TOKEN` | Shared token for read operations | - | Shared/Hybrid |
-| `GITLAB_MAX_PAGE_SIZE` | Maximum items per page (1-100) | `50` | All |
-| `GITLAB_TIMEOUT` | Request timeout in milliseconds | `30000` | All |
-
-### GitLab Access Token Setup
-
-#### For Shared/System Tokens
-1. Go to your GitLab instance → **User Settings** → **Access Tokens**
-2. Create a new token with **read_api** scope (read-only access)
-3. Set as `GITLAB_SHARED_ACCESS_TOKEN`
-
-#### For User Tokens (LibreChat Integration)
-Users will be prompted to provide their own tokens with:
-- **api** scope (full access for write operations)
-- **read_api** scope (read-only access)
-
-LibreChat will handle user credential collection and management automatically.
-
-## Available Tools
-
-### 🔍 **Search & Discovery Tools (Perfect for LLMs)**
-Comprehensive search capabilities across your GitLab instance:
-- `search_gitlab` - Global search across projects, issues, and merge requests
-- `search_projects` - Find repositories by name or description
-- `search_issues` - Search issues globally or within specific projects
-- `search_merge_requests` - Find merge requests and code changes
-- `search_users` - Locate team members and contributors
-- `search_groups` - Discover groups and organizations
-- `browse_repository` - Explore codebase structure and files
-- `get_file_content` - Read specific files for code analysis
-
-### 🔓 Read-Only Operations (Optional Authentication)
-Can use shared token if available, or user credentials for private data:
-- `get_project` - Get detailed project information
-- `get_issues` - List project issues with pagination  
-- `get_merge_requests` - List project merge requests with pagination
-- `execute_custom_query` - Run custom GraphQL queries
-- `get_available_queries` - Discover available GraphQL operations
-
-### 🔒 User Authentication Required
-Always require user-provided credentials:
-- `get_current_user` - Get authenticated user information
-- `get_projects` - List accessible projects (includes private projects)
-
-### ✏️ Write Operations (User Authentication Required)
-Always require user credentials with write permissions:
-- `create_issue` - Create new issues
-- `create_merge_request` - Create new merge requests
- - `update_issue` - Update issue title/description/assignees/labels/due date (schema-aware)
- - `update_merge_request` - Update MR title/description/assignees/reviewers/labels (schema-aware)
-
-### Authentication Behavior by Mode
-
-| Tool | Shared Mode | Per-User Mode | Hybrid Mode |
-|------|-------------|---------------|-------------|
-| Read-only tools | Uses shared token | Requires user auth | Uses shared token, falls back to user auth |
-| User auth tools | Uses shared token | Requires user auth | Requires user auth |
-| Write tools | Uses shared token | Requires user auth | Requires user auth |
-
-## Usage Examples
-
-### 🔍 **Search & Discovery (Perfect for LLMs)**
-
-```typescript
-// Global search across everything - ideal for LLM exploration
-await callTool('search_gitlab', { 
-  searchTerm: 'authentication bug'
-  // Searches projects, issues, and merge requests simultaneously
-})
-
-// Search for specific projects
-await callTool('search_projects', { 
-  searchTerm: 'api gateway',
-  first: 10
-})
-
-// Find issues related to a topic (globally or in specific project)
-await callTool('search_issues', { 
-  searchTerm: 'login error',
-  state: 'opened',
-  projectPath: 'backend/auth-service' // Optional: limit to specific project
-})
-
-// Search merge requests for code changes
-await callTool('search_merge_requests', { 
-  searchTerm: 'database migration',
-  state: 'merged',
-  first: 20
-})
-
-// Find team members
-await callTool('search_users', { 
-  searchTerm: 'john smith'
-})
-
-// Explore codebase structure
-await callTool('browse_repository', { 
-  projectPath: 'frontend/web-app',
-  path: 'src/components', // Browse specific directory
-  ref: 'main'
-})
-
-// Get file content for analysis
-await callTool('get_file_content', { 
-  projectPath: 'backend/api',
-  filePath: 'src/auth/login.js',
-  ref: 'develop'
-})
-```
-
-### Basic Project Information
-```typescript
-// Get public project info (uses shared token if available)
-await callTool('get_project', { 
-  fullPath: 'group/project' 
-})
-
-// Get project with user authentication (for private projects)
-await callTool('get_project', { 
-  fullPath: 'group/private-project',
-  userCredentials: {
-    accessToken: 'your-personal-access-token'
-  }
-})
-
-// Get current user (always requires user auth)
-await callTool('get_current_user', {
-  userCredentials: {
-    accessToken: 'your-personal-access-token'
-  }
-})
-```
-
-### Issues and Merge Requests
-```typescript
-// List issues (uses shared token if available)
-await callTool('get_issues', { 
-  projectPath: 'group/project',
-  first: 20 
-})
-
-// Create an issue (requires user authentication)
-await callTool('create_issue', {
-  projectPath: 'group/project',
-  title: 'New feature request',
-  description: 'Detailed description...',
-  userCredentials: {
-    accessToken: 'your-personal-access-token'
-  }
-})
-```
-
-### 🤖 **LLM Use Cases & Examples**
-
-Perfect for AI-powered GitLab analysis and automation:
-
-```typescript
-// "Find all recent authentication-related issues"
-await callTool('search_issues', { 
-  searchTerm: 'auth login password',
-  state: 'opened'
-})
-
-// "Show me the structure of the payment processing service"
-await callTool('browse_repository', { 
-  projectPath: 'backend/payment-service',
-  path: 'src'
-})
-
-// "What's in the main configuration file?"
-await callTool('get_file_content', { 
-  projectPath: 'infrastructure/config',
-  filePath: 'production.yml'
-})
-
-// "Find all projects related to machine learning"
-await callTool('search_projects', { 
-  searchTerm: 'ml machine learning AI'
-})
-
-// "Who worked on the database migration?"
-await callTool('search_merge_requests', { 
-  searchTerm: 'database migration',
-  state: 'merged'
-})
-```
-
-### LibreChat Integration
-When using with LibreChat, users will be prompted for their credentials automatically:
-
-```typescript
-// LibreChat stores PAT in creds UI; server reads Authorization header
-await callTool('create_merge_request', {
-  projectPath: 'group/project',
-  title: 'Feature: Add new functionality',
-  sourceBranch: 'feature-branch',
-  targetBranch: 'main',
-  description: 'Implementation details...'
-})
-
-// Schema-aware issue update (IDs resolved automatically)
-await callTool('update_issue', {
-  projectPath: 'group/project',
-  iid: '123',
-  title: 'Updated title',
-  assigneeUsernames: ['alice'],
-  labelNames: ['High Priority'],
-  dueDate: '2025-12-31'
-})
-
-// Schema-aware MR update (reviewers apply to MRs, not issues)
-await callTool('update_merge_request', {
-  projectPath: 'group/project',
-  iid: '45',
-  title: 'Refined MR title',
-  reviewerUsernames: ['bob'],
-  assigneeUsernames: ['alice'],
-  labelNames: ['Backend']
-})
-```
-
-### Advanced GraphQL Queries
-```typescript
-// Discover available operations
-await callTool('get_available_queries', {})
-
-// Execute custom query
-await callTool('execute_custom_query', {
-  query: `
-    query GetProjectStatistics($path: ID!) {
-      project(fullPath: $path) {
-        statistics {
-          commitCount
-          storageSize
-          repositorySize
-        }
-      }
-    }
-  `,
-  variables: { path: 'group/project' }
-})
-```
-
-## LibreChat Integration
-
-The GitLab MCP server uses **Streamable HTTP** transport (MCP spec 2025-03-26) for optimal compatibility with LibreChat and modern MCP clients.
-
-### **Docker Integration (Recommended)**
-
-1. **Copy the Dockerfile** to your LibreChat root directory
-2. **Add GitLab environment variables** to your LibreChat `.env`
-3. **Add the service** to your `docker-compose.override.yml`
-4. **Configure the MCP server** in your `librechat.yml`
-5. **Restart LibreChat** with the override file
-
-### **Environment Variables**
-Add these to your LibreChat `.env` file:
-```bash
-# GitLab MCP Server Configuration
-GITLAB_URL=https://your-gitlab.com           # Your GitLab instance
-GITLAB_AUTH_MODE=hybrid                       # Authentication mode
-GITLAB_SHARED_ACCESS_TOKEN=                   # Optional shared token
-GITLAB_MCP_PORT=8008                          # Server port (do NOT set PORT in LibreChat)
-MCP_TRANSPORT=http                            # Use HTTP transport
-```
-
-### **LibreChat Configuration**
-The server uses **Streamable HTTP** transport on port 8008:
 ```yaml
 mcpServers:
   gitlab:
@@ -537,144 +97,115 @@ mcpServers:
         description: "e.g., https://gitlab.yourdomain.com"
 ```
 
-### **Transport Features**
-- ✅ **Streamable HTTP** (MCP spec 2025-03-26)
-- ✅ **Session management** with per-session credential isolation
-- ✅ **Connection resilience** with proper error handling
-- ✅ **Accept header validation** per MCP specification
-- ✅ **DELETE support** for explicit session termination
-- ✅ **Bidirectional communication** with streaming support
+### 4. Restart LibreChat:
 
-### **User Authentication Flow**
-- **Read operations**: Use shared token (if configured) or prompt for user token
-- **Write operations**: Always prompt for user Personal Access Token
-- **Private data**: Requires user authentication for access
-- **LibreChat handles**: Automatic credential prompts and management
-- **Session isolation**: Each user's credentials are stored per-session (never shared between users)
+```bash
+docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
+```
 
-## GraphQL Schema Discovery
+---
 
-The server automatically introspects the GitLab GraphQL schema on startup, enabling:
+## Available Tools
 
-- **Dynamic query discovery** - Find available operations
-- **Schema-aware querying** - Leverage full GitLab API capabilities
-- **Future-proof design** - Automatically supports new GitLab features
+### Search & Discovery
+| Tool | Description |
+|------|-------------|
+| `search_gitlab` | Global search across projects, issues, and merge requests |
+| `search_projects` | Find repositories by name or description |
+| `search_issues` | Search issues globally or within a project (filter by assignee, author, labels, state) |
+| `search_merge_requests` | Find merge requests by username or within a project |
+| `search_users` | Find team members and contributors |
+| `search_groups` | Discover groups and organizations |
+| `browse_repository` | Explore directory structure and files |
+| `get_file_content` | Read file contents for code analysis |
 
-## Self-Hosted GitLab Support
+### Read Operations
+| Tool | Description |
+|------|-------------|
+| `get_project` | Detailed project information |
+| `get_issues` | List project issues with pagination |
+| `get_merge_requests` | List project merge requests with pagination |
+| `get_user_issues` | Get all issues assigned to a user |
+| `get_user_merge_requests` | Get MRs authored by or assigned to a user |
+| `resolve_path` | Resolve a path to a project or group |
+| `get_available_queries` | Discover available GraphQL operations |
+| `execute_custom_query` | Run custom GraphQL queries |
 
-Works with any GitLab instance:
-- **GitLab.com** (default)
-- **GitLab CE/EE** self-hosted instances
-- **GitLab SaaS** custom domains
+### Write Operations (requires user authentication)
+| Tool | Description |
+|------|-------------|
+| `create_issue` | Create new issues |
+| `create_merge_request` | Create new merge requests |
+| `update_issue` | Update title, description, assignees, labels, due date |
+| `update_merge_request` | Update title, description, assignees, reviewers, labels |
 
-Simply set `GITLAB_URL` to your instance URL.
+---
 
-## Error Handling
+## Configuration
 
-The server includes comprehensive error handling:
-- **Authentication errors** - Clear token validation messages
-- **Rate limiting** - Respects GitLab API limits
-- **Network issues** - Timeout and retry logic
-- **GraphQL errors** - Detailed query error reporting
+### Authentication Modes
 
-## Security Considerations
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| **hybrid** (default) | Shared token for reads + per-user tokens for writes | Multi-user deployments |
+| **shared** | Single token for all operations | Single-user / trusted environments |
+| **per-user** | All operations require user authentication | High-security environments |
 
-### Authentication Security
-- **Per-user tokens** are never stored or logged by the server
-- **Shared tokens** are only used for read-only operations when configured
-- **Credential isolation** - Each user's credentials are handled separately
-- **Scope separation** - Shared tokens should only have `read_api` scope
+### Environment Variables
 
-### Token Management
-- **Shared Token**: 
-  - Should have minimal `read_api` scope only
-  - Used for public/read-only operations
-  - Stored as environment variable on server
-- **User Tokens**:
-  - Can have `api` scope for full functionality  
-  - Provided by users through LibreChat interface
-  - Never persisted by the MCP server
-  - Automatically handled by LibreChat's authentication system
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GITLAB_URL` | GitLab instance URL | `https://gitlab.com` |
+| `GITLAB_AUTH_MODE` | Authentication mode (`hybrid`, `shared`, `per-user`) | `hybrid` |
+| `GITLAB_SHARED_ACCESS_TOKEN` | Shared token for read operations | — |
+| `GITLAB_MAX_PAGE_SIZE` | Maximum items per page (1-100) | `50` |
+| `GITLAB_TIMEOUT` | Request timeout in milliseconds | `30000` |
+| `GITLAB_MCP_PORT` | HTTP server port (LibreChat mode) | `8008` |
+| `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | stdio |
 
-### Deployment Security
-- **Container security** - Runs as non-root user
-- **Network isolation** - Docker network segmentation supported
-- **Environment variables** - Use Docker secrets or secure environment management
-- **HTTPS required** - Always use HTTPS for GitLab connections
-
-### Recommended Security Practices
-1. **Use hybrid mode** for LibreChat deployments
-2. **Limit shared token scope** to `read_api` only
-3. **Enable user authentication** for all write operations
-4. **Use Docker secrets** for shared token storage
-5. **Monitor token usage** through GitLab audit logs
-6. **Rotate tokens regularly** according to your security policy
+---
 
 ## Troubleshooting
 
-### Common Issues
+**Connection issues with LibreChat:**
+- Verify `type: streamable-http` in `librechat.yml` (not `sse`)
+- URL should be `http://gitlab-mcp:8008/` (the Docker service name, not localhost)
+- Ensure both containers share the same Docker network
+- Check logs: `docker logs gitlab-mcp`
 
-1. **LibreChat Connection Drops / Reconnecting**
-   - ✅ **Fixed in v1.0.0+**: Updated to Streamable HTTP transport
-   - Check that LibreChat config uses `type: streamable-http`
-   - Verify URL points to `http://gitlab-mcp:8008/` (not `/sse`)
-   - Check Docker logs: `docker logs librechat` and `docker logs gitlab-mcp`
-   - Ensure both containers are on the same network
+**Authentication errors:**
+- Verify token has `read_api` or `api` scope and hasn't expired
+- For LibreChat: check the user provided a valid PAT in the credentials UI
 
-2. **Authentication Failed**
-   - Verify `GITLAB_ACCESS_TOKEN` is correct
-   - Ensure token has `read_api` or `api` scope
-   - Check token hasn't expired
-   - For LibreChat: Verify user provided valid PAT in credentials UI
+**Schema introspection failed:**
+- Requires GitLab 12.0+ with GraphQL API enabled
+- Verify `GITLAB_URL` is reachable from the container
 
-3. **Session Not Found / 404 Errors**
-   - This is normal behavior when sessions expire
-   - LibreChat will automatically reinitialize
-   - Check `activeSessions` in health endpoint: `curl http://localhost:8008/health`
-
-4. **Connection Issues**
-   - Verify `GITLAB_URL` is accessible from container
-   - Check firewall/proxy settings
-   - Confirm SSL certificates are valid
-   - Test connectivity: `docker exec gitlab-mcp curl -I https://gitlab.com`
-
-5. **Schema Introspection Failed**
-   - Ensure GitLab instance supports GraphQL
-   - Verify API endpoint is `/api/graphql`
-   - Check GitLab version compatibility (GitLab 12.0+)
-
-### Debug Logging
-
-Set `NODE_ENV=development` for detailed logging:
+**Debug logging:**
 ```bash
 NODE_ENV=development GITLAB_URL=https://your-gitlab.com npm start
 ```
 
-### Health Check
-
-Test server health and active sessions:
+**Health check (HTTP mode):**
 ```bash
 curl http://localhost:8008/health
 ```
 
-Expected response:
-```json
-{
-  "status": "healthy",
-  "timestamp": "2025-10-22T12:00:00.000Z",
-  "activeSessions": 2,
-  "transport": "streamable-http",
-  "protocol": "2025-03-26"
-}
+---
+
+## Testing
+
+```bash
+# Test with MCP Inspector
+npx @modelcontextprotocol/inspector npx @ttpears/gitlab-mcp-server
 ```
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Add tests for new functionality
-4. Submit a pull request
+3. Submit a pull request
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT
