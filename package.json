@@ -1,5 +1,5 @@
 {
-  "name": "gitlab-mcp-server",
+  "name": "@ttpears/gitlab-mcp-server",
   "version": "1.7.0",
   "description": "GitLab MCP Server with GraphQL discovery",
   "main": "dist/index.js",
@@ -27,7 +27,7 @@
   "homepage": "https://github.com/ttpears/gitlab-mcp#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ttpears/gitlab-mcp.git"
+    "url": "git+https://github.com/ttpears/gitlab-mcp.git"
   },
   "bugs": {
     "url": "https://github.com/ttpears/gitlab-mcp/issues"
