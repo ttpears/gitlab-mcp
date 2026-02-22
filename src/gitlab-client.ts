@@ -1240,7 +1240,401 @@ export class GitLabGraphQLClient {
         }
       }
     `;
-    
+
     return this.query(query, { search: searchTerm, first: Math.min(first, 50) }, userConfig);
+  }
+
+  // ── CI/CD Pipelines ──────────────────────────────────────────────────
+
+  async getMergeRequestPipelines(
+    projectPath: string,
+    iid: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestPipelines($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            pipelines(first: $first, after: $after) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                id
+                iid
+                status
+                duration
+                createdAt
+                finishedAt
+                ref
+                sha
+                detailedStatus {
+                  text
+                  label
+                  icon
+                  group
+                  detailsPath
+                }
+                stages {
+                  nodes {
+                    name
+                    status
+                    detailedStatus {
+                      text
+                      label
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { projectPath, iid, first: Math.min(first, 50), after }, userConfig);
+  }
+
+  async getPipelineJobs(
+    projectPath: string,
+    pipelineIid: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getPipelineJobs($projectPath: ID!, $pipelineIid: ID!, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          pipeline(iid: $pipelineIid) {
+            id
+            iid
+            status
+            jobs(first: $first, after: $after) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                id
+                name
+                status
+                stage {
+                  name
+                }
+                duration
+                queuedDuration
+                createdAt
+                startedAt
+                finishedAt
+                retryable
+                cancelable
+                webPath
+                detailedStatus {
+                  text
+                  label
+                  icon
+                  group
+                  detailsPath
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { projectPath, pipelineIid, first: Math.min(first, 50), after }, userConfig);
+  }
+
+  async getPipelineId(projectPath: string, pipelineIid: string, userConfig?: UserConfig): Promise<string> {
+    const query = gql`
+      query pipelineId($projectPath: ID!, $pipelineIid: ID!) {
+        project(fullPath: $projectPath) {
+          pipeline(iid: $pipelineIid) { id }
+        }
+      }
+    `;
+    const result = await this.query(query, { projectPath, pipelineIid }, userConfig);
+    const id = result?.project?.pipeline?.id;
+    if (!id) throw new Error('Pipeline not found');
+    return id;
+  }
+
+  async managePipeline(
+    projectPath: string,
+    pipelineIid: string,
+    action: 'retry' | 'cancel',
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const pipelineGlobalId = await this.getPipelineId(projectPath, pipelineIid, userConfig);
+
+    if (action === 'retry') {
+      const fieldName = fields['pipelineRetry'] ? 'pipelineRetry' : null;
+      if (!fieldName) {
+        throw new Error('pipelineRetry mutation is not available on this GitLab instance');
+      }
+      const mutation = gql`
+        mutation retryPipeline($input: PipelineRetryInput!) {
+          pipelineRetry(input: $input) {
+            pipeline { id iid status }
+            errors
+          }
+        }
+      `;
+      const result = await this.query(mutation, { input: { id: pipelineGlobalId } }, userConfig, true);
+      const payload = result.pipelineRetry;
+      if (payload.errors && payload.errors.length > 0) {
+        throw new Error(`Failed to retry pipeline: ${payload.errors.join(', ')}`);
+      }
+      return payload;
+    } else {
+      const fieldName = fields['pipelineCancel'] ? 'pipelineCancel' : null;
+      if (!fieldName) {
+        throw new Error('pipelineCancel mutation is not available on this GitLab instance');
+      }
+      const mutation = gql`
+        mutation cancelPipeline($input: PipelineCancelInput!) {
+          pipelineCancel(input: $input) {
+            errors
+          }
+        }
+      `;
+      const result = await this.query(mutation, { input: { id: pipelineGlobalId } }, userConfig, true);
+      const payload = result.pipelineCancel;
+      if (payload.errors && payload.errors.length > 0) {
+        throw new Error(`Failed to cancel pipeline: ${payload.errors.join(', ')}`);
+      }
+      return payload;
+    }
+  }
+
+  // ── MR Diffs & Commits ───────────────────────────────────────────────
+
+  async getMergeRequestDiffs(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestDiffs($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            diffStatsSummary {
+              additions
+              deletions
+              fileCount
+            }
+            diffStats {
+              path
+              additions
+              deletions
+            }
+            diffRefs {
+              baseSha
+              headSha
+              startSha
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { projectPath, iid }, userConfig);
+  }
+
+  async getMergeRequestCommits(
+    projectPath: string,
+    iid: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestCommits($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+        project(fullPath: $projectPath) {
+          mergeRequest(iid: $iid) {
+            commitCount
+            commitsWithoutMergeCommits(first: $first, after: $after) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                sha
+                shortId
+                title
+                message
+                authorName
+                authoredDate
+                webUrl
+              }
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { projectPath, iid, first: Math.min(first, 50), after }, userConfig);
+  }
+
+  // ── Work Item Notes ──────────────────────────────────────────────────
+
+  async getNotes(
+    projectPath: string,
+    noteableType: 'issue' | 'merge_request',
+    iid: string,
+    first: number = 20,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    if (noteableType === 'issue') {
+      const query = gql`
+        query getIssueNotes($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+          project(fullPath: $projectPath) {
+            issue(iid: $iid) {
+              notes(first: $first, after: $after) {
+                pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+                nodes {
+                  id
+                  body
+                  author { username name }
+                  createdAt
+                  updatedAt
+                  system
+                  internal
+                  url
+                }
+              }
+            }
+          }
+        }
+      `;
+      return this.query(query, { projectPath, iid, first: Math.min(first, 50), after }, userConfig);
+    } else {
+      const query = gql`
+        query getMergeRequestNotes($projectPath: ID!, $iid: String!, $first: Int!, $after: String) {
+          project(fullPath: $projectPath) {
+            mergeRequest(iid: $iid) {
+              notes(first: $first, after: $after) {
+                pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+                nodes {
+                  id
+                  body
+                  author { username name }
+                  createdAt
+                  updatedAt
+                  system
+                  internal
+                  url
+                  position {
+                    filePath
+                    newLine
+                    oldLine
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
+      return this.query(query, { projectPath, iid, first: Math.min(first, 50), after }, userConfig);
+    }
+  }
+
+  async createNote(
+    projectPath: string,
+    noteableType: 'issue' | 'merge_request',
+    iid: string,
+    body: string,
+    internal: boolean = false,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+    const mutationType = this.schema?.getMutationType();
+    const fields = mutationType ? mutationType.getFields() : {};
+
+    const fieldName = fields['createNote'] ? 'createNote' : null;
+    if (!fieldName) {
+      throw new Error('createNote mutation is not available on this GitLab instance');
+    }
+
+    // Resolve the noteable IID to a global ID
+    const noteableId = noteableType === 'issue'
+      ? await this.getIssueId(projectPath, iid, userConfig)
+      : await this.getMergeRequestId(projectPath, iid, userConfig);
+
+    const mutation = gql`
+      mutation createNote($input: CreateNoteInput!) {
+        createNote(input: $input) {
+          note {
+            id
+            body
+            author { username name }
+            createdAt
+            url
+            internal
+          }
+          errors
+        }
+      }
+    `;
+
+    const input: any = {
+      noteableId,
+      body,
+    };
+    if (internal) {
+      input.internal = true;
+    }
+
+    const result = await this.query(mutation, { input }, userConfig, true);
+    return result.createNote;
+  }
+
+  // ── Label Search ─────────────────────────────────────────────────────
+
+  async searchLabels(
+    fullPath: string,
+    isProject: boolean,
+    search?: string,
+    first: number = 50,
+    after?: string,
+    userConfig?: UserConfig
+  ): Promise<any> {
+    if (isProject) {
+      const query = gql`
+        query searchProjectLabels($fullPath: ID!, $search: String, $first: Int!, $after: String) {
+          project(fullPath: $fullPath) {
+            labels(searchTerm: $search, first: $first, after: $after) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                id
+                title
+                description
+                color
+                textColor
+                createdAt
+                updatedAt
+              }
+            }
+          }
+        }
+      `;
+      return this.query(query, { fullPath, search, first: Math.min(first, 100), after }, userConfig);
+    } else {
+      const query = gql`
+        query searchGroupLabels($fullPath: ID!, $search: String, $first: Int!, $after: String) {
+          group(fullPath: $fullPath) {
+            labels(searchTerm: $search, first: $first, after: $after) {
+              pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+              nodes {
+                id
+                title
+                description
+                color
+                textColor
+                createdAt
+                updatedAt
+              }
+            }
+          }
+        }
+      `;
+      return this.query(query, { fullPath, search, first: Math.min(first, 100), after }, userConfig);
+    }
   }
 }

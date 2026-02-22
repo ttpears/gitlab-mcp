@@ -284,24 +284,6 @@ const getAvailableQueriesTools: Tool = {
   },
 };
 
-export const readOnlyTools: Tool[] = [
-  getProjectTool,
-  getIssuesTool,
-  getMergeRequestsTool,
-  executeCustomQueryTool,
-  getAvailableQueriesTools,
-];
-
-export const userAuthTools: Tool[] = [
-  getCurrentUserTool,
-  getProjectsTool,
-];
-
-export const writeTools: Tool[] = [
-  createIssueTool,
-  createMergeRequestTool,
-];
-
 const updateIssueTool: Tool = {
   name: 'update_issue',
   title: 'Update Issue',
@@ -753,6 +735,242 @@ const getFileContentTool: Tool = {
   },
 };
 
+// CI/CD Pipeline tools
+const getMergeRequestPipelinesTool: Tool = {
+  name: 'get_merge_request_pipelines',
+  title: 'MR Pipelines',
+  description: 'Get CI/CD pipelines for a merge request, including status, duration, and stages',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID'),
+    first: z.number().min(1).max(100).default(20).describe('Number of pipelines to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getMergeRequestPipelines(input.projectPath, input.iid, input.first, input.after, credentials);
+    if (!result?.project?.mergeRequest) {
+      throw new Error('Merge request not found');
+    }
+    return result.project.mergeRequest.pipelines;
+  },
+};
+
+const getPipelineJobsTool: Tool = {
+  name: 'get_pipeline_jobs',
+  title: 'Pipeline Jobs',
+  description: 'Get jobs for a specific pipeline, including status, stage, duration, and retry/cancel info',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    pipelineIid: z.string().describe('Pipeline IID'),
+    first: z.number().min(1).max(100).default(20).describe('Number of jobs to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getPipelineJobs(input.projectPath, input.pipelineIid, input.first, input.after, credentials);
+    if (!result?.project?.pipeline) {
+      throw new Error('Pipeline not found');
+    }
+    return {
+      pipeline: {
+        id: result.project.pipeline.id,
+        iid: result.project.pipeline.iid,
+        status: result.project.pipeline.status,
+      },
+      jobs: result.project.pipeline.jobs,
+    };
+  },
+};
+
+const managePipelineTool: Tool = {
+  name: 'manage_pipeline',
+  title: 'Manage Pipeline',
+  description: 'Retry or cancel a CI/CD pipeline (requires user authentication with write permissions)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    pipelineIid: z.string().describe('Pipeline IID'),
+    action: z.enum(['retry', 'cancel']).describe('Action to perform on the pipeline'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for pipeline management. Please provide your GitLab credentials.');
+    }
+    return await client.managePipeline(input.projectPath, input.pipelineIid, input.action, credentials);
+  },
+};
+
+// MR Diffs & Commits tools
+const getMergeRequestDiffsTool: Tool = {
+  name: 'get_merge_request_diffs',
+  title: 'MR Diffs',
+  description: 'Get diff statistics for a merge request, including per-file additions/deletions and diff refs',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getMergeRequestDiffs(input.projectPath, input.iid, credentials);
+    if (!result?.project?.mergeRequest) {
+      throw new Error('Merge request not found');
+    }
+    return result.project.mergeRequest;
+  },
+};
+
+const getMergeRequestCommitsTool: Tool = {
+  name: 'get_merge_request_commits',
+  title: 'MR Commits',
+  description: 'Get commits for a merge request (excluding merge commits), with commit count and details',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().describe('Merge request IID'),
+    first: z.number().min(1).max(100).default(20).describe('Number of commits to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getMergeRequestCommits(input.projectPath, input.iid, input.first, input.after, credentials);
+    if (!result?.project?.mergeRequest) {
+      throw new Error('Merge request not found');
+    }
+    return {
+      commitCount: result.project.mergeRequest.commitCount,
+      commits: result.project.mergeRequest.commitsWithoutMergeCommits,
+    };
+  },
+};
+
+// Work Item Notes tools
+const getNotesTool: Tool = {
+  name: 'get_notes',
+  title: 'Notes/Comments',
+  description: 'Get notes (comments) on an issue or merge request, including system notes and inline MR comments',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    noteableType: z.enum(['issue', 'merge_request']).describe('Type of item to get notes for'),
+    iid: z.string().describe('Issue or merge request IID'),
+    first: z.number().min(1).max(100).default(20).describe('Number of notes to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getNotes(input.projectPath, input.noteableType, input.iid, input.first, input.after, credentials);
+    const noteable = input.noteableType === 'issue'
+      ? result?.project?.issue
+      : result?.project?.mergeRequest;
+    if (!noteable) {
+      throw new Error(`${input.noteableType === 'issue' ? 'Issue' : 'Merge request'} not found`);
+    }
+    return noteable.notes;
+  },
+};
+
+const createNoteTool: Tool = {
+  name: 'create_note',
+  title: 'Create Note',
+  description: 'Add a comment/note to an issue or merge request (requires user authentication)',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: {
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+  },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
+    noteableType: z.enum(['issue', 'merge_request']).describe('Type of item to add a note to'),
+    iid: z.string().describe('Issue or merge request IID'),
+    body: z.string().min(1).describe('Note body (supports Markdown)'),
+    internal: z.boolean().default(false).describe('Whether the note is internal/confidential (only visible to project members)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for creating notes. Please provide your GitLab credentials.');
+    }
+    const result = await client.createNote(input.projectPath, input.noteableType, input.iid, input.body, input.internal, credentials);
+    if (result.errors && result.errors.length > 0) {
+      throw new Error(`Failed to create note: ${result.errors.join(', ')}`);
+    }
+    return result.note;
+  },
+};
+
+// Label Search tool
+const searchLabelsTool: Tool = {
+  name: 'search_labels',
+  title: 'Search Labels',
+  description: 'Search for labels in a project or group, with optional text filtering',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: {
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+  },
+  inputSchema: withUserAuth(z.object({
+    fullPath: z.string().describe('Full path of the project or group (e.g., "group/project-name" or "group")'),
+    isProject: z.boolean().describe('Whether the path is a project (true) or group (false)'),
+    search: z.string().optional().describe('Optional search term to filter labels'),
+    first: z.number().min(1).max(100).default(50).describe('Number of labels to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.searchLabels(input.fullPath, input.isProject, input.search, input.first, input.after, credentials);
+    const container = input.isProject ? result?.project : result?.group;
+    if (!container) {
+      throw new Error(`${input.isProject ? 'Project' : 'Group'} not found: ${input.fullPath}`);
+    }
+    return container.labels;
+  },
+};
+
 // Helper functions for common user queries
 const getUserIssuesTool: Tool = {
   name: 'get_user_issues',
@@ -864,6 +1082,31 @@ const getUserMergeRequestsTool: Tool = {
   },
 };
 
+export const readOnlyTools: Tool[] = [
+  getProjectTool,
+  getIssuesTool,
+  getMergeRequestsTool,
+  executeCustomQueryTool,
+  getAvailableQueriesTools,
+  getMergeRequestPipelinesTool,
+  getPipelineJobsTool,
+  getMergeRequestDiffsTool,
+  getMergeRequestCommitsTool,
+  getNotesTool,
+];
+
+export const userAuthTools: Tool[] = [
+  getCurrentUserTool,
+  getProjectsTool,
+];
+
+export const writeTools: Tool[] = [
+  createIssueTool,
+  createMergeRequestTool,
+  createNoteTool,
+  managePipelineTool,
+];
+
 export const searchTools: Tool[] = [
   globalSearchTool,
   searchProjectsTool,
@@ -873,6 +1116,7 @@ export const searchTools: Tool[] = [
   getUserMergeRequestsTool,
   searchUsersTool,
   searchGroupsTool,
+  searchLabelsTool,
   browseRepositoryTool,
   getFileContentTool,
 ];
