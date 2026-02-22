@@ -25,15 +25,15 @@ GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/mo
 | **Repository browsing & file reading** | Yes | No |
 | **User / group search** | Yes | No |
 | **Update issues & MRs** | Yes | No (create only) |
-| **CI/CD pipeline management** | No | Yes |
-| **MR diffs & commits** | No | Yes |
-| **Work item notes** | No | Yes |
+| **CI/CD pipeline management** | Yes | Yes |
+| **MR diffs & commits** | Yes | Yes |
+| **Work item notes** | Yes | Yes |
 | **Semantic code search** | No | Yes (requires additional setup) |
-| **Label search** | No | Yes |
+| **Label search** | Yes | Yes |
 
 **Choose this server** if you're on GitLab Free/Community Edition, need GraphQL flexibility, want repo browsing, or run LibreChat multi-user deployments.
 
-**Choose the official server** if you have GitLab Premium/Ultimate with Duo, need CI/CD pipeline tools, or prefer OAuth over PATs.
+**Choose the official server** if you have GitLab Premium/Ultimate with Duo, need semantic code search, or prefer OAuth over PATs.
 
 ---
 
@@ -144,6 +144,7 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 | `search_merge_requests` | Find merge requests by username or within a project |
 | `search_users` | Find team members and contributors |
 | `search_groups` | Discover groups and organizations |
+| `search_labels` | Search labels in a project or group |
 | `browse_repository` | Explore directory structure and files |
 | `get_file_content` | Read file contents for code analysis |
 
@@ -153,6 +154,11 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 | `get_project` | Detailed project information |
 | `get_issues` | List project issues with pagination |
 | `get_merge_requests` | List project merge requests with pagination |
+| `get_merge_request_pipelines` | Get CI/CD pipelines for a merge request |
+| `get_pipeline_jobs` | Get jobs for a specific pipeline |
+| `get_merge_request_diffs` | Get diff statistics for a merge request |
+| `get_merge_request_commits` | Get commits for a merge request |
+| `get_notes` | Get notes/comments on an issue or merge request |
 | `get_user_issues` | Get all issues assigned to a user |
 | `get_user_merge_requests` | Get MRs authored by or assigned to a user |
 | `resolve_path` | Resolve a path to a project or group |
@@ -164,6 +170,8 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 |------|-------------|
 | `create_issue` | Create new issues |
 | `create_merge_request` | Create new merge requests |
+| `create_note` | Add a comment/note to an issue or merge request |
+| `manage_pipeline` | Retry or cancel a CI/CD pipeline |
 | `update_issue` | Update title, description, assignees, labels, due date |
 | `update_merge_request` | Update title, description, assignees, reviewers, labels |
 
