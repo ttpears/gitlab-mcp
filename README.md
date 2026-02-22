@@ -1,6 +1,13 @@
 # GitLab MCP Server
 
+[![npm version](https://img.shields.io/npm/v/@ttpears/gitlab-mcp-server)](https://www.npmjs.com/package/@ttpears/gitlab-mcp-server)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A Model Context Protocol (MCP) server for GitLab that leverages GraphQL with automatic schema discovery and supports self-hosted GitLab instances. **Perfect for LLM-powered GitLab exploration and analysis.**
+
+```bash
+npx @ttpears/gitlab-mcp-server
+```
 
 ## ⚡ Quick Start (Claude Desktop & Claude Code)
 
@@ -20,7 +27,7 @@ Create a GitLab Personal Access Token with `read_api` or `api` scope:
   "mcpServers": {
     "gitlab": {
       "command": "npx",
-      "args": ["-y", "gitlab-mcp-server"],
+      "args": ["-y", "@ttpears/gitlab-mcp-server"],
       "env": {
         "GITLAB_URL": "https://gitlab.com",
         "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here",
@@ -37,7 +44,7 @@ Create a GitLab Personal Access Token with `read_api` or `api` scope:
   "mcpServers": {
     "gitlab": {
       "command": "npx",
-      "args": ["-y", "gitlab-mcp-server"],
+      "args": ["-y", "@ttpears/gitlab-mcp-server"],
       "env": {
         "GITLAB_URL": "https://gitlab.com",
         "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here",
@@ -62,32 +69,20 @@ Test your configuration before using it with Claude:
 
 ```bash
 # Test with MCP Inspector (interactive UI)
-npx @modelcontextprotocol/inspector npx gitlab-mcp-server
+npx @modelcontextprotocol/inspector npx @ttpears/gitlab-mcp-server
 ```
 
 Set environment variables when prompted or create `mcp-inspector.example.json`:
 ```json
 {
   "command": "npx",
-  "args": ["-y", "gitlab-mcp-server"],
+  "args": ["-y", "@ttpears/gitlab-mcp-server"],
   "env": {
     "GITLAB_URL": "https://gitlab.com",
     "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-test-token"
   }
 }
 ```
-
-## 🚀 **Recent Updates (2026-01-26)**
-
-**Major modernization for universal MCP support:**
-- ✅ **Claude Desktop & Claude Code support** - Easy npx installation with stdio transport
-- ✅ **Removed deprecated SSE transport** - Clean Streamable HTTP only for LibreChat
-- ✅ **Enhanced logging** - Clear transport mode detection and configuration display
-- ✅ **Quick start documentation** - Copy-paste configs for all MCP clients
-- ✅ **MCP Inspector support** - Easy testing and debugging
-- ✅ **Single codebase** - Auto-detects stdio vs HTTP mode based on environment
-
-**These changes make GitLab MCP work seamlessly across all MCP clients while simplifying deployment.**
 
 ## ✨ **Key Features for LLMs**
 
@@ -186,14 +181,14 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 5. **Copy and run** the generated installation command:
    ```bash
    # Example command (actual command from Smithery)
-   npx @smithery/cli install gitlab-mcp-server
+   npx @smithery/cli install @ttpears/gitlab-mcp-server
    ```
 6. **Configure in your `librechat.yml`** (Smithery will provide the exact configuration):
    ```yaml
    mcpServers:
      gitlab:
        command: npx
-       args: ["gitlab-mcp-server"]
+       args: ["@ttpears/gitlab-mcp-server"]
        type: stdio
        env:
          GITLAB_URL: "https://gitlab.com"
