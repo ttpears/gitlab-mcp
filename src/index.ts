@@ -5,6 +5,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as http from 'http';
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { URL, fileURLToPath } from 'url';
 import express from 'express';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -664,11 +665,14 @@ export default function createMcpServer(_args: { sessionId: string; config: unkn
 // Optional: expose a (currently empty) config schema for /.well-known/mcp-config
 export const configSchema = z.object({});
 
-// Run in CLI mode only if this file is the program entry-point
+// Run in CLI mode only if this file is the program entry-point.
+// Use realpathSync on both paths so symlink-based invocation (e.g. via npx
+// or .bin/ wrappers) resolves to the same real path as import.meta.url.
 const isMain = (() => {
   try {
-    const thisFile = fileURLToPath(import.meta.url);
-    return process.argv[1] && thisFile === process.argv[1];
+    const thisFile = realpathSync(fileURLToPath(import.meta.url));
+    const entryFile = realpathSync(process.argv[1]);
+    return !!(process.argv[1] && thisFile === entryFile);
   } catch {
     return false;
   }
