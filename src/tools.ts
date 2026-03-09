@@ -1183,7 +1183,7 @@ const searchLabelsTool: Tool = {
     fullPath: z.string().describe('Full path of the project or group (e.g., "group/project-name" or "group")'),
     isProject: z.boolean().describe('Whether the path is a project (true) or group (false)'),
     search: z.string().optional().describe('Optional search term to filter labels'),
-    first: z.number().min(1).max(100).default(50).describe('Number of labels to retrieve'),
+    first: z.number().min(1).max(100).default(20).describe('Number of labels to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
   })),
   handler: async (input, client, userConfig) => {
@@ -1213,7 +1213,7 @@ const getUserIssuesTool: Tool = {
     username: z.string().describe('Username to find issues for (e.g., "cdhanlon")'),
     state: z.string().default('opened').describe('Filter by issue state (opened, closed, all)'),
     projectPath: z.string().optional().describe('Optional: limit search to a specific project'),
-    first: z.number().min(1).max(100).default(50).describe('Number of issues to retrieve'),
+    first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
   })),
   handler: async (input, client, userConfig) => {
@@ -1268,7 +1268,7 @@ const getUserMergeRequestsTool: Tool = {
     role: z.enum(['author', 'assignee']).default('author').describe('Whether to find MRs authored by or assigned to the user'),
     state: z.string().default('opened').describe('Filter by MR state (opened, closed, merged, all)'),
     projectPath: z.string().optional().describe('Optional: limit search to a specific project'),
-    first: z.number().min(1).max(100).default(50).describe('Number of merge requests to retrieve'),
+    first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
   })),
   handler: async (input, client, userConfig) => {
