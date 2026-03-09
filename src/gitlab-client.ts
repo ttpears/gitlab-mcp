@@ -845,10 +845,11 @@ export class GitLabGraphQLClient {
     return Object.keys(fields);
   }
 
-  async globalSearch(searchTerm?: string, scope?: string, userConfig?: UserConfig): Promise<any> {
+  async globalSearch(searchTerm?: string, first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
     const query = gql`
-      query globalSearch($search: String, $first: Int!) {
-        projects(search: $search, first: $first) {
+      query globalSearch($search: String, $first: Int!, $after: String) {
+        projects(search: $search, first: $first, after: $after) {
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
           nodes {
             id
             name
@@ -857,7 +858,8 @@ export class GitLabGraphQLClient {
             visibility
           }
         }
-        issues(search: $search, first: $first) {
+        issues(search: $search, first: $first, after: $after) {
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
           nodes {
             id
             iid
@@ -872,8 +874,36 @@ export class GitLabGraphQLClient {
 
     return this.query(query, {
       search: searchTerm || undefined,
-      first: Math.min(this.config.maxPageSize, 25)
+      first: Math.min(first, this.config.maxPageSize),
+      after
     }, userConfig);
+  }
+
+  async globalSearchAll(searchTerm?: string, maxItems: number = 100, userConfig?: UserConfig): Promise<{
+    projects: PaginatedResult<any>;
+    issues: PaginatedResult<any>;
+  }> {
+    const projectsQuery = gql`
+      query globalSearchProjects($search: String, $first: Int!, $after: String) {
+        projects(search: $search, first: $first, after: $after) {
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+          nodes { id name fullPath webUrl visibility }
+        }
+      }
+    `;
+    const issuesQuery = gql`
+      query globalSearchIssues($search: String, $first: Int!, $after: String) {
+        issues(search: $search, first: $first, after: $after) {
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+          nodes { id iid title state webUrl createdAt }
+        }
+      }
+    `;
+    const [projects, issues] = await Promise.all([
+      this.fetchAllPages(projectsQuery, { search: searchTerm || undefined }, 'projects', { maxItems, userConfig }),
+      this.fetchAllPages(issuesQuery, { search: searchTerm || undefined }, 'issues', { maxItems, userConfig }),
+    ]);
+    return { projects, issues };
   }
 
   async searchProjects(searchTerm: string, first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {

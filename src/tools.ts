@@ -452,15 +452,29 @@ const globalSearchTool: Tool = {
   },
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term (leave empty for recent activity)'),
+    first: z.number().min(1).max(100).default(20).describe('Number of results to retrieve per category'),
+    after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results per category'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.globalSearch(input.searchTerm, undefined, credentials);
+
+    if (input.fetchAll) {
+      const result = await client.globalSearchAll(input.searchTerm, undefined, credentials);
+      return {
+        searchTerm: input.searchTerm,
+        projects: result.projects,
+        issues: result.issues,
+        totalResults: result.projects.totalFetched + result.issues.totalFetched,
+      };
+    }
+
+    const result = await client.globalSearch(input.searchTerm, input.first, input.after, credentials);
     return {
       searchTerm: input.searchTerm,
-      projects: result.projects.nodes,
-      issues: result.issues.nodes,
-      totalResults: result.projects.nodes.length + result.issues.nodes.length,
+      projects: result.projects,
+      issues: result.issues,
+      totalResults: (result.projects.nodes?.length || 0) + (result.issues.nodes?.length || 0),
       _note: 'This is a text search only. For filtering by assignee/author/labels, use search_issues or get_user_issues. For MRs, use search_merge_requests with username.'
     };
   },
