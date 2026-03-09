@@ -1265,10 +1265,16 @@ export class GitLabGraphQLClient {
     }, userConfig);
   }
 
-  async searchUsers(searchTerm: string, first: number = 20, userConfig?: UserConfig): Promise<any> {
+  async searchUsers(searchTerm: string, first: number = 20, after?: string, fetchAll = false, userConfig?: UserConfig): Promise<any> {
     const query = gql`
-      query searchUsers($search: String!, $first: Int!) {
-        users(search: $search, first: $first) {
+      query searchUsers($search: String!, $first: Int!, $after: String) {
+        users(search: $search, first: $first, after: $after) {
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
           nodes {
             id
             username
@@ -1280,14 +1286,28 @@ export class GitLabGraphQLClient {
         }
       }
     `;
-    
-    return this.query(query, { search: searchTerm, first: Math.min(first, 50) }, userConfig);
+
+    if (fetchAll) {
+      return this.fetchAllPages(query, { search: searchTerm }, 'users', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
+    return this.query(query, { search: searchTerm, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
   }
 
-  async searchGroups(searchTerm: string, first: number = 20, userConfig?: UserConfig): Promise<any> {
+  async searchGroups(searchTerm: string, first: number = 20, after?: string, fetchAll = false, userConfig?: UserConfig): Promise<any> {
     const query = gql`
-      query searchGroups($search: String!, $first: Int!) {
-        groups(search: $search, first: $first) {
+      query searchGroups($search: String!, $first: Int!, $after: String) {
+        groups(search: $search, first: $first, after: $after) {
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+            startCursor
+            endCursor
+          }
           nodes {
             id
             name
@@ -1301,7 +1321,15 @@ export class GitLabGraphQLClient {
       }
     `;
 
-    return this.query(query, { search: searchTerm, first: Math.min(first, 50) }, userConfig);
+    if (fetchAll) {
+      return this.fetchAllPages(query, { search: searchTerm }, 'groups', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
+    return this.query(query, { search: searchTerm, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
   }
 
   // ── CI/CD Pipelines ──────────────────────────────────────────────────

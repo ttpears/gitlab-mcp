@@ -619,10 +619,15 @@ const searchUsersTool: Tool = {
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
       .describe('Search term to find users by username or name'),
     first: z.number().min(1).max(100).default(20).describe('Number of users to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.searchUsers(input.searchTerm, input.first, credentials);
+    const result = await client.searchUsers(input.searchTerm, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     return result.users;
   },
 };
@@ -644,10 +649,15 @@ const searchGroupsTool: Tool = {
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
       .describe('Search term to find groups by name or path'),
     first: z.number().min(1).max(100).default(20).describe('Number of groups to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.searchGroups(input.searchTerm, input.first, credentials);
+    const result = await client.searchGroups(input.searchTerm, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     return result.groups;
   },
 };
