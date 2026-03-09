@@ -6,9 +6,16 @@
   - Tools accept optional `userCredentials` with `accessToken` and optional `gitlabUrl`.
 
 - Transports
-  - Server provides stdio (default) and HTTP with SSE endpoints: GET `/sse`, POST `/message`, plus a streamable HTTP endpoint at `/`.
+  - Server provides stdio (default) and Streamable HTTP transport at `/` (and `/mcp` for container compatibility).
   - LibreChat (HTTP) should use `type: streamable-http` and `url: http://HOST:PORT/`.
   - Hosted environments may provide `PORT`; server also respects `GITLAB_MCP_PORT` and `MCP_TRANSPORT=http`.
+
+- Pagination
+  - All list/search tools support cursor-based pagination (`first`, `after`) and auto-pagination (`fetchAll`).
+  - `fetchAll` loops server-side via `fetchAllPages()` up to maxItems (default 100), returning `{ nodes, totalFetched, hasMore, pageInfo }`.
+  - Default page size: 20. Max per request: `config.maxPageSize` (default 50, env `GITLAB_MAX_PAGE_SIZE`).
+  - Sort defaults to `UPDATED_DESC` for recency bias on issues, MRs, and projects.
+  - `search_gitlab` paginates projects and issues independently when `fetchAll=true`.
 
 - GraphQL / Validation
   - Avoid unsupported fields (e.g., `Project.defaultBranch`) across self-hosted instances; rely on introspection.
