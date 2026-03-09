@@ -107,10 +107,14 @@ const getProjectsTool: Tool = {
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getProjects(input.first, input.after, credentials, input.sort);
+    const result = await client.getProjects(input.first, input.after, input.fetchAll, credentials, input.sort);
+    if (input.fetchAll) {
+      return result;
+    }
     return result.projects;
   },
 };
@@ -131,10 +135,14 @@ const getIssuesTool: Tool = {
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getIssues(input.projectPath, input.first, input.after, credentials, input.sort);
+    const result = await client.getIssues(input.projectPath, input.first, input.after, input.fetchAll, credentials, input.sort);
+    if (input.fetchAll) {
+      return result;
+    }
     if (!result || !result.project || !result.project.issues) {
       throw new Error('Project not found or issues are not accessible for the provided path');
     }
@@ -158,10 +166,14 @@ const getMergeRequestsTool: Tool = {
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getMergeRequests(input.projectPath, input.first, input.after, credentials, input.sort);
+    const result = await client.getMergeRequests(input.projectPath, input.first, input.after, input.fetchAll, credentials, input.sort);
+    if (input.fetchAll) {
+      return result;
+    }
     if (!result || !result.project || !result.project.mergeRequests) {
       throw new Error('Project not found or merge requests are not accessible for the provided path');
     }
@@ -498,10 +510,14 @@ const searchProjectsTool: Tool = {
       .describe('Search term to find projects by name or description'),
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.searchProjects(input.searchTerm, input.first, input.after, credentials);
+    const result = await client.searchProjects(input.searchTerm, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     return result.projects;
   },
 };
@@ -527,6 +543,7 @@ const searchIssuesTool: Tool = {
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -536,12 +553,17 @@ const searchIssuesTool: Tool = {
       input.state,
       input.first,
       input.after,
+      input.fetchAll,
       credentials,
       input.assigneeUsernames,
       input.authorUsername,
       input.labelNames,
       input.sort
     );
+
+    if (input.fetchAll) {
+      return result;
+    }
 
     // Return the issues from either project-specific or global search
     if (input.projectPath) {
@@ -586,6 +608,7 @@ const searchMergeRequestsTool: Tool = {
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -598,9 +621,14 @@ const searchMergeRequestsTool: Tool = {
       input.state,
       input.first,
       input.after,
+      input.fetchAll,
       credentials,
       input.sort
     );
+
+    if (input.fetchAll) {
+      return result;
+    }
 
     // Handle project-specific search
     if (input.projectPath) {
@@ -783,10 +811,14 @@ const getMergeRequestPipelinesTool: Tool = {
     iid: z.string().describe('Merge request IID'),
     first: z.number().min(1).max(100).default(20).describe('Number of pipelines to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getMergeRequestPipelines(input.projectPath, input.iid, input.first, input.after, credentials);
+    const result = await client.getMergeRequestPipelines(input.projectPath, input.iid, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     if (!result?.project?.mergeRequest) {
       throw new Error('Merge request not found');
     }
@@ -810,10 +842,14 @@ const getPipelineJobsTool: Tool = {
     pipelineIid: z.string().describe('Pipeline IID'),
     first: z.number().min(1).max(100).default(20).describe('Number of jobs to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getPipelineJobs(input.projectPath, input.pipelineIid, input.first, input.after, credentials);
+    const result = await client.getPipelineJobs(input.projectPath, input.pipelineIid, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     if (!result?.project?.pipeline) {
       throw new Error('Pipeline not found');
     }
@@ -895,10 +931,14 @@ const getMergeRequestCommitsTool: Tool = {
     iid: z.string().describe('Merge request IID'),
     first: z.number().min(1).max(100).default(20).describe('Number of commits to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getMergeRequestCommits(input.projectPath, input.iid, input.first, input.after, credentials);
+    const result = await client.getMergeRequestCommits(input.projectPath, input.iid, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     if (!result?.project?.mergeRequest) {
       throw new Error('Merge request not found');
     }
@@ -927,10 +967,14 @@ const getNotesTool: Tool = {
     iid: z.string().describe('Issue or merge request IID'),
     first: z.number().min(1).max(100).default(20).describe('Number of notes to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getNotes(input.projectPath, input.noteableType, input.iid, input.first, input.after, credentials);
+    const result = await client.getNotes(input.projectPath, input.noteableType, input.iid, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     const noteable = input.noteableType === 'issue'
       ? result?.project?.issue
       : result?.project?.mergeRequest;
@@ -993,13 +1037,17 @@ const listMilestonesTool: Tool = {
     includeAncestors: z.boolean().default(false).describe('Include milestones from ancestor groups'),
     first: z.number().min(1).max(100).default(20).describe('Number of milestones to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     const result = await client.listMilestones(
       input.fullPath, input.isProject, input.state, input.search,
-      input.includeAncestors, input.first, input.after, credentials
+      input.includeAncestors, input.first, input.after, input.fetchAll, credentials
     );
+    if (input.fetchAll) {
+      return result;
+    }
     const container = input.isProject ? result?.project : result?.group;
     if (!container) {
       throw new Error(`${input.isProject ? 'Project' : 'Group'} not found: ${input.fullPath}`);
@@ -1024,11 +1072,15 @@ const listIterationsTool: Tool = {
     state: z.string().optional().describe('Filter by state: upcoming, current, opened, closed (omit for all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of iterations to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
     try {
-      const result = await client.listIterations(input.groupPath, input.state, input.first, input.after, credentials);
+      const result = await client.listIterations(input.groupPath, input.state, input.first, input.after, input.fetchAll, credentials);
+      if (input.fetchAll) {
+        return result;
+      }
       if (!result?.group) {
         throw new Error(`Group not found: ${input.groupPath}`);
       }
@@ -1170,10 +1222,14 @@ const listGroupMembersTool: Tool = {
     search: z.string().optional().describe('Optional search term to filter members by name or username'),
     first: z.number().min(1).max(100).default(20).describe('Number of members to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.listGroupMembers(input.groupPath, input.search, input.first, input.after, credentials);
+    const result = await client.listGroupMembers(input.groupPath, input.search, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     if (!result?.group) {
       throw new Error(`Group not found: ${input.groupPath}`);
     }
@@ -1199,10 +1255,14 @@ const searchLabelsTool: Tool = {
     search: z.string().optional().describe('Optional search term to filter labels'),
     first: z.number().min(1).max(100).default(20).describe('Number of labels to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.searchLabels(input.fullPath, input.isProject, input.search, input.first, input.after, credentials);
+    const result = await client.searchLabels(input.fullPath, input.isProject, input.search, input.first, input.after, input.fetchAll, credentials);
+    if (input.fetchAll) {
+      return result;
+    }
     const container = input.isProject ? result?.project : result?.group;
     if (!container) {
       throw new Error(`${input.isProject ? 'Project' : 'Group'} not found: ${input.fullPath}`);
@@ -1229,6 +1289,7 @@ const getUserIssuesTool: Tool = {
     projectPath: z.string().optional().describe('Optional: limit search to a specific project'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1240,11 +1301,16 @@ const getUserIssuesTool: Tool = {
       input.state,
       input.first,
       input.after,
+      input.fetchAll,
       credentials,
       [input.username], // assigneeUsernames
       undefined, // authorUsername
       undefined  // labelNames
     );
+
+    if (input.fetchAll) {
+      return result;
+    }
 
     if (input.projectPath) {
       if (!result || !result.project || !result.project.issues) {
@@ -1284,6 +1350,7 @@ const getUserMergeRequestsTool: Tool = {
     projectPath: z.string().optional().describe('Optional: limit search to a specific project'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1297,8 +1364,13 @@ const getUserMergeRequestsTool: Tool = {
       input.state,
       input.first,
       input.after,
+      input.fetchAll,
       credentials
     );
+
+    if (input.fetchAll) {
+      return result;
+    }
 
     if (input.projectPath) {
       if (!result || !result.project || !result.project.mergeRequests) {

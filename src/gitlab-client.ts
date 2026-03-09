@@ -414,7 +414,7 @@ export class GitLabGraphQLClient {
     return this.query(query, { fullPath }, userConfig);
   }
 
-  async getProjects(first: number = 20, after?: string, userConfig?: UserConfig, sort?: string): Promise<any> {
+  async getProjects(first: number = 20, after?: string, fetchAll = false, userConfig?: UserConfig, sort?: string): Promise<any> {
     const query = gql`
       query getProjects($first: Int!, $after: String, $sort: String) {
         projects(first: $first, after: $after, sort: $sort) {
@@ -430,10 +430,19 @@ export class GitLabGraphQLClient {
           }
       }
     `;
+
+    if (fetchAll) {
+      return this.fetchAllPages(query, { sort }, 'projects', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, { first: Math.min(first, this.config.maxPageSize), after, sort }, userConfig);
   }
 
-  async getIssues(projectPath: string, first: number = 20, after?: string, userConfig?: UserConfig, sort?: string): Promise<any> {
+  async getIssues(projectPath: string, first: number = 20, after?: string, fetchAll = false, userConfig?: UserConfig, sort?: string): Promise<any> {
     const query = gql`
       query getIssues($projectPath: ID!, $first: Int!, $after: String, $sort: IssueSort) {
         project(fullPath: $projectPath) {
@@ -453,10 +462,19 @@ export class GitLabGraphQLClient {
         }
       }
     `;
+
+    if (fetchAll) {
+      return this.fetchAllPages(query, { projectPath, sort: sort || 'UPDATED_DESC' }, 'project.issues', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, { projectPath, first: Math.min(first, this.config.maxPageSize), after, sort: sort || 'UPDATED_DESC' }, userConfig);
   }
 
-  async getMergeRequests(projectPath: string, first: number = 20, after?: string, userConfig?: UserConfig, sort?: string): Promise<any> {
+  async getMergeRequests(projectPath: string, first: number = 20, after?: string, fetchAll = false, userConfig?: UserConfig, sort?: string): Promise<any> {
     const query = gql`
       query getMergeRequests($projectPath: ID!, $first: Int!, $after: String, $sort: MergeRequestSort) {
         project(fullPath: $projectPath) {
@@ -479,6 +497,15 @@ export class GitLabGraphQLClient {
         }
       }
     `;
+
+    if (fetchAll) {
+      return this.fetchAllPages(query, { projectPath, sort: sort || 'UPDATED_DESC' }, 'project.mergeRequests', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, { projectPath, first: Math.min(first, this.config.maxPageSize), after, sort: sort || 'UPDATED_DESC' }, userConfig);
   }
 
@@ -906,7 +933,7 @@ export class GitLabGraphQLClient {
     return { projects, issues };
   }
 
-  async searchProjects(searchTerm: string, first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
+  async searchProjects(searchTerm: string, first: number = 20, after?: string, fetchAll = false, userConfig?: UserConfig): Promise<any> {
     const query = gql`
       query searchProjects($search: String!, $first: Int!, $after: String) {
         projects(search: $search, first: $first, after: $after) {
@@ -923,7 +950,15 @@ export class GitLabGraphQLClient {
         }
       }
     `;
-    
+
+    if (fetchAll) {
+      return this.fetchAllPages(query, { search: searchTerm }, 'projects', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, { search: searchTerm, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
   }
 
@@ -945,6 +980,7 @@ export class GitLabGraphQLClient {
     state?: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig,
     assigneeUsernames?: string[],
     authorUsername?: string,
@@ -985,6 +1021,22 @@ export class GitLabGraphQLClient {
           }
         }
       `;
+      if (fetchAll) {
+        return this.fetchAllPages(query, {
+          projectPath,
+          search: searchTerm,
+          state: mapped,
+          assigneeUsernames,
+          authorUsername,
+          labelName: labelNames,
+          sort: sort || 'UPDATED_DESC'
+        }, 'project.issues', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, {
         projectPath,
         search: searchTerm,
@@ -1032,6 +1084,21 @@ export class GitLabGraphQLClient {
       `;
       // Note: Global search returns streamlined fields (no assignees/labels/project) for performance.
       // For full details and project attribution, search within a specific project using projectPath.
+      if (fetchAll) {
+        return this.fetchAllPages(query, {
+          search: searchTerm,
+          state: mapped,
+          assigneeUsernames,
+          authorUsername,
+          labelName: labelNames,
+          sort: sort || 'UPDATED_DESC'
+        }, 'issues', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, {
         search: searchTerm,
         state: mapped,
@@ -1051,6 +1118,7 @@ export class GitLabGraphQLClient {
     state?: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig,
     sort?: string
   ): Promise<any> {
@@ -1079,6 +1147,19 @@ export class GitLabGraphQLClient {
           }
         }
       `;
+      if (fetchAll) {
+        return this.fetchAllPages(query, {
+          projectPath,
+          search: searchTerm,
+          state: mappedState,
+          sort: sort || 'UPDATED_DESC'
+        }, 'project.mergeRequests', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, {
         projectPath,
         search: searchTerm,
@@ -1136,6 +1217,18 @@ export class GitLabGraphQLClient {
         `;
 
         try {
+          if (fetchAll) {
+            const connectionPath = `user.${fieldName}`;
+            return this.fetchAllPages(query, {
+              username,
+              state: mappedState
+            }, connectionPath, {
+              maxItems: first,
+              pageSize: this.config.maxPageSize,
+              userConfig,
+            });
+          }
+
           const result = await this.query(query, {
             username,
             first: Math.min(first, this.config.maxPageSize),
@@ -1374,6 +1467,7 @@ export class GitLabGraphQLClient {
     iid: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig
   ): Promise<any> {
     const query = gql`
@@ -1414,6 +1508,14 @@ export class GitLabGraphQLClient {
         }
       }
     `;
+    if (fetchAll) {
+      return this.fetchAllPages(query, { projectPath, iid }, 'project.mergeRequest.pipelines', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, { projectPath, iid, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
   }
 
@@ -1422,6 +1524,7 @@ export class GitLabGraphQLClient {
     pipelineIid: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig
   ): Promise<any> {
     const query = gql`
@@ -1461,6 +1564,14 @@ export class GitLabGraphQLClient {
         }
       }
     `;
+    if (fetchAll) {
+      return this.fetchAllPages(query, { projectPath, pipelineIid }, 'project.pipeline.jobs', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, { projectPath, pipelineIid, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
   }
 
@@ -1568,6 +1679,7 @@ export class GitLabGraphQLClient {
     iid: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig
   ): Promise<any> {
     const query = gql`
@@ -1591,6 +1703,14 @@ export class GitLabGraphQLClient {
         }
       }
     `;
+    if (fetchAll) {
+      return this.fetchAllPages(query, { projectPath, iid }, 'project.mergeRequest.commitsWithoutMergeCommits', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, { projectPath, iid, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
   }
 
@@ -1602,6 +1722,7 @@ export class GitLabGraphQLClient {
     iid: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig
   ): Promise<any> {
     if (noteableType === 'issue') {
@@ -1626,6 +1747,14 @@ export class GitLabGraphQLClient {
           }
         }
       `;
+      if (fetchAll) {
+        return this.fetchAllPages(query, { projectPath, iid }, 'project.issue.notes', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, { projectPath, iid, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
     } else {
       const query = gql`
@@ -1654,6 +1783,14 @@ export class GitLabGraphQLClient {
           }
         }
       `;
+      if (fetchAll) {
+        return this.fetchAllPages(query, { projectPath, iid }, 'project.mergeRequest.notes', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, { projectPath, iid, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
     }
   }
@@ -1718,6 +1855,7 @@ export class GitLabGraphQLClient {
     includeAncestors: boolean = false,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig
   ): Promise<any> {
     const milestoneFields = `
@@ -1752,6 +1890,19 @@ export class GitLabGraphQLClient {
           }
         }
       `;
+      if (fetchAll) {
+        return this.fetchAllPages(query, {
+          fullPath,
+          state: state?.toLowerCase(),
+          searchTitle: search,
+          includeAncestors,
+        }, 'project.milestones', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, {
         fullPath,
         state: state?.toLowerCase(),
@@ -1770,6 +1921,19 @@ export class GitLabGraphQLClient {
           }
         }
       `;
+      if (fetchAll) {
+        return this.fetchAllPages(query, {
+          fullPath,
+          state: state?.toLowerCase(),
+          searchTitle: search,
+          includeAncestors,
+        }, 'group.milestones', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, {
         fullPath,
         state: state?.toLowerCase(),
@@ -1788,6 +1952,7 @@ export class GitLabGraphQLClient {
     state?: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig
   ): Promise<any> {
     const query = gql`
@@ -1818,6 +1983,17 @@ export class GitLabGraphQLClient {
         }
       }
     `;
+    if (fetchAll) {
+      return this.fetchAllPages(query, {
+        groupPath,
+        state: state?.toLowerCase(),
+      }, 'group.iterations', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, {
       groupPath,
       state: state?.toLowerCase(),
@@ -2003,6 +2179,7 @@ export class GitLabGraphQLClient {
     search?: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig
   ): Promise<any> {
     const query = gql`
@@ -2030,6 +2207,17 @@ export class GitLabGraphQLClient {
         }
       }
     `;
+    if (fetchAll) {
+      return this.fetchAllPages(query, {
+        groupPath,
+        search: search || undefined,
+      }, 'group.groupMembers', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
     return this.query(query, {
       groupPath,
       search: search || undefined,
@@ -2046,6 +2234,7 @@ export class GitLabGraphQLClient {
     search?: string,
     first: number = 20,
     after?: string,
+    fetchAll = false,
     userConfig?: UserConfig
   ): Promise<any> {
     if (isProject) {
@@ -2067,6 +2256,14 @@ export class GitLabGraphQLClient {
           }
         }
       `;
+      if (fetchAll) {
+        return this.fetchAllPages(query, { fullPath, search }, 'project.labels', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, { fullPath, search, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
     } else {
       const query = gql`
@@ -2087,6 +2284,14 @@ export class GitLabGraphQLClient {
           }
         }
       `;
+      if (fetchAll) {
+        return this.fetchAllPages(query, { fullPath, search }, 'group.labels', {
+          maxItems: first,
+          pageSize: this.config.maxPageSize,
+          userConfig,
+        });
+      }
+
       return this.query(query, { fullPath, search, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
     }
   }
