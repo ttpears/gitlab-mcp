@@ -106,10 +106,11 @@ const getProjectsTool: Tool = {
   inputSchema: withUserAuth(z.object({
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getProjects(input.first, input.after, credentials);
+    const result = await client.getProjects(input.first, input.after, credentials, input.sort);
     return result.projects;
   },
 };
@@ -129,10 +130,11 @@ const getIssuesTool: Tool = {
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getIssues(input.projectPath, input.first, input.after, credentials);
+    const result = await client.getIssues(input.projectPath, input.first, input.after, credentials, input.sort);
     if (!result || !result.project || !result.project.issues) {
       throw new Error('Project not found or issues are not accessible for the provided path');
     }
@@ -155,10 +157,11 @@ const getMergeRequestsTool: Tool = {
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    const result = await client.getMergeRequests(input.projectPath, input.first, input.after, credentials);
+    const result = await client.getMergeRequests(input.projectPath, input.first, input.after, credentials, input.sort);
     if (!result || !result.project || !result.project.mergeRequests) {
       throw new Error('Project not found or merge requests are not accessible for the provided path');
     }
@@ -509,6 +512,7 @@ const searchIssuesTool: Tool = {
     labelNames: z.array(z.string()).optional().describe('Filter by label names (e.g., ["Priority::High", "bug"])'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -521,7 +525,8 @@ const searchIssuesTool: Tool = {
       credentials,
       input.assigneeUsernames,
       input.authorUsername,
-      input.labelNames
+      input.labelNames,
+      input.sort
     );
 
     // Return the issues from either project-specific or global search
@@ -566,6 +571,7 @@ const searchMergeRequestsTool: Tool = {
     state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
+    sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -578,7 +584,8 @@ const searchMergeRequestsTool: Tool = {
       input.state,
       input.first,
       input.after,
-      credentials
+      credentials,
+      input.sort
     );
 
     // Handle project-specific search

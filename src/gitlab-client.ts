@@ -414,10 +414,10 @@ export class GitLabGraphQLClient {
     return this.query(query, { fullPath }, userConfig);
   }
 
-  async getProjects(first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
+  async getProjects(first: number = 20, after?: string, userConfig?: UserConfig, sort?: string): Promise<any> {
     const query = gql`
-      query getProjects($first: Int!, $after: String) {
-        projects(first: $first, after: $after) {
+      query getProjects($first: Int!, $after: String, $sort: String) {
+        projects(first: $first, after: $after, sort: $sort) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
@@ -430,14 +430,14 @@ export class GitLabGraphQLClient {
           }
       }
     `;
-    return this.query(query, { first: Math.min(first, 50), after }, userConfig);
+    return this.query(query, { first: Math.min(first, 50), after, sort }, userConfig);
   }
 
-  async getIssues(projectPath: string, first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
+  async getIssues(projectPath: string, first: number = 20, after?: string, userConfig?: UserConfig, sort?: string): Promise<any> {
     const query = gql`
-      query getIssues($projectPath: ID!, $first: Int!, $after: String) {
+      query getIssues($projectPath: ID!, $first: Int!, $after: String, $sort: IssueSort) {
         project(fullPath: $projectPath) {
-          issues(first: $first, after: $after) {
+          issues(first: $first, after: $after, sort: $sort) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
@@ -453,14 +453,14 @@ export class GitLabGraphQLClient {
         }
       }
     `;
-    return this.query(query, { projectPath, first: Math.min(first, 50), after }, userConfig);
+    return this.query(query, { projectPath, first: Math.min(first, 50), after, sort: sort || 'UPDATED_DESC' }, userConfig);
   }
 
-  async getMergeRequests(projectPath: string, first: number = 20, after?: string, userConfig?: UserConfig): Promise<any> {
+  async getMergeRequests(projectPath: string, first: number = 20, after?: string, userConfig?: UserConfig, sort?: string): Promise<any> {
     const query = gql`
-      query getMergeRequests($projectPath: ID!, $first: Int!, $after: String) {
+      query getMergeRequests($projectPath: ID!, $first: Int!, $after: String, $sort: MergeRequestSort) {
         project(fullPath: $projectPath) {
-          mergeRequests(first: $first, after: $after) {
+          mergeRequests(first: $first, after: $after, sort: $sort) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
@@ -479,7 +479,7 @@ export class GitLabGraphQLClient {
         }
       }
     `;
-    return this.query(query, { projectPath, first: Math.min(first, 50), after }, userConfig);
+    return this.query(query, { projectPath, first: Math.min(first, 50), after, sort: sort || 'UPDATED_DESC' }, userConfig);
   }
 
   async createIssue(projectPath: string, title: string, description?: string, userConfig?: UserConfig): Promise<any> {
@@ -918,7 +918,8 @@ export class GitLabGraphQLClient {
     userConfig?: UserConfig,
     assigneeUsernames?: string[],
     authorUsername?: string,
-    labelNames?: string[]
+    labelNames?: string[],
+    sort?: string
   ): Promise<any> {
     await this.introspectSchema(userConfig);
     const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
@@ -935,9 +936,9 @@ export class GitLabGraphQLClient {
         : undefined;
 
       const query = gql`
-        query searchIssuesProject($projectPath: ID!, $search: String, $state: ${stateEnum}, $first: Int!, $after: String, $assigneeUsernames: [String!], $authorUsername: String, $labelName: [String!]) {
+        query searchIssuesProject($projectPath: ID!, $search: String, $state: ${stateEnum}, $first: Int!, $after: String, $assigneeUsernames: [String!], $authorUsername: String, $labelName: [String!], $sort: IssueSort) {
           project(fullPath: $projectPath) {
-            issues(search: $search, state: $state, first: $first, after: $after, assigneeUsernames: $assigneeUsernames, authorUsername: $authorUsername, labelName: $labelName) {
+            issues(search: $search, state: $state, first: $first, after: $after, assigneeUsernames: $assigneeUsernames, authorUsername: $authorUsername, labelName: $labelName, sort: $sort) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id
@@ -962,7 +963,8 @@ export class GitLabGraphQLClient {
         after,
         assigneeUsernames,
         authorUsername,
-        labelName: labelNames
+        labelName: labelNames,
+        sort: sort || 'UPDATED_DESC'
       }, userConfig);
     } else {
       const queryType = this.schema.getQueryType();
@@ -980,8 +982,8 @@ export class GitLabGraphQLClient {
       // We keep description for AI context but limit nested collections (assignees/labels)
       // Note: Global Issue type doesn't have 'project' field - only project-scoped queries do
       const query = gql`
-        query searchIssuesGlobal($search: String, $state: ${stateEnum}, $first: Int!, $after: String, $assigneeUsernames: [String!], $authorUsername: String, $labelName: [String!]) {
-          issues(search: $search, state: $state, first: $first, after: $after, assigneeUsernames: $assigneeUsernames, authorUsername: $authorUsername, labelName: $labelName) {
+        query searchIssuesGlobal($search: String, $state: ${stateEnum}, $first: Int!, $after: String, $assigneeUsernames: [String!], $authorUsername: String, $labelName: [String!], $sort: IssueSort) {
+          issues(search: $search, state: $state, first: $first, after: $after, assigneeUsernames: $assigneeUsernames, authorUsername: $authorUsername, labelName: $labelName, sort: $sort) {
             pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
             nodes {
               id
@@ -1007,7 +1009,8 @@ export class GitLabGraphQLClient {
         after,
         assigneeUsernames,
         authorUsername,
-        labelName: labelNames
+        labelName: labelNames,
+        sort: sort || 'UPDATED_DESC'
       }, userConfig);
     }
   }
@@ -1018,15 +1021,16 @@ export class GitLabGraphQLClient {
     state?: string,
     first: number = 20,
     after?: string,
-    userConfig?: UserConfig
+    userConfig?: UserConfig,
+    sort?: string
   ): Promise<any> {
     const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
 
     if (projectPath) {
       const query = gql`
-        query searchMergeRequestsProject($projectPath: ID!, $search: String, $state: MergeRequestState, $first: Int!, $after: String) {
+        query searchMergeRequestsProject($projectPath: ID!, $search: String, $state: MergeRequestState, $first: Int!, $after: String, $sort: MergeRequestSort) {
           project(fullPath: $projectPath) {
-            mergeRequests(search: $search, state: $state, first: $first, after: $after) {
+            mergeRequests(search: $search, state: $state, first: $first, after: $after, sort: $sort) {
               pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
               nodes {
                 id
@@ -1050,7 +1054,8 @@ export class GitLabGraphQLClient {
         search: searchTerm,
         state: mappedState,
         first: Math.min(first, 50),
-        after
+        after,
+        sort: sort || 'UPDATED_DESC'
       }, userConfig);
     } else {
       // GitLab GraphQL API does NOT support global MR search at root level
