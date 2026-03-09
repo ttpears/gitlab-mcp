@@ -54,6 +54,20 @@ const RETRY_CONFIG = {
   retryableErrorCodes: ['ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'ECONNREFUSED', 'EAI_AGAIN'],
 };
 
+export interface PageInfo {
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  startCursor: string | null;
+  endCursor: string | null;
+}
+
+export interface PaginatedResult<T> {
+  nodes: T[];
+  totalFetched: number;
+  hasMore: boolean;
+  pageInfo: PageInfo;
+}
+
 export class GitLabGraphQLClient {
   private baseClient: GraphQLClient | null = null;
   private config: Config;
@@ -309,6 +323,52 @@ export class GitLabGraphQLClient {
       () => client.request<T>(query, variables),
       'GraphQL query'
     );
+  }
+
+  async fetchAllPages<T = any>(
+    query: string,
+    variables: Record<string, any>,
+    connectionPath: string,
+    options: {
+      maxItems?: number;
+      pageSize?: number;
+      userConfig?: UserConfig;
+    } = {}
+  ): Promise<PaginatedResult<T>> {
+    const maxItems = options.maxItems ?? 100;
+    const pageSize = Math.min(options.pageSize ?? 50, this.config.maxPageSize);
+    const allNodes: T[] = [];
+    let after: string | undefined = undefined;
+    let lastPageInfo: PageInfo = { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null };
+
+    while (allNodes.length < maxItems) {
+      const remaining = maxItems - allNodes.length;
+      const currentPageSize = Math.min(pageSize, remaining);
+
+      const result = await this.query(query, { ...variables, first: currentPageSize, after }, options.userConfig);
+
+      // Navigate to the connection using the dot-separated path
+      const connection = connectionPath.split('.').reduce((obj: any, key: string) => obj?.[key], result);
+      if (!connection || !connection.nodes) {
+        break;
+      }
+
+      allNodes.push(...connection.nodes);
+      lastPageInfo = connection.pageInfo || lastPageInfo;
+
+      if (!lastPageInfo.hasNextPage || allNodes.length >= maxItems) {
+        break;
+      }
+
+      after = lastPageInfo.endCursor ?? undefined;
+    }
+
+    return {
+      nodes: allNodes,
+      totalFetched: allNodes.length,
+      hasMore: lastPageInfo.hasNextPage && allNodes.length >= maxItems,
+      pageInfo: lastPageInfo,
+    };
   }
 
   async getCurrentUser(userConfig?: UserConfig): Promise<any> {
