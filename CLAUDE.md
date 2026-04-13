@@ -39,11 +39,11 @@ When adding a new tool, mirror an existing one of the same shape (list/search/up
 
 Releases are fully automated from `package.json` version bumps on `main`:
 
-1. Bump `version` in `package.json` and merge to `main`.
+1. Bump `version` in `package.json` **and** sync `package-lock.json` (`npm install --package-lock-only`), then merge to `main`. Forgetting the lockfile won't fail CI but leaves it drifted.
 2. `.github/workflows/ci.yml` builds, then the `tag` job creates and pushes `vX.Y.Z` (skipped if the tag already exists).
 3. `.github/workflows/release.yml` fires on tag push and runs `npm publish --provenance` plus `gh release create --generate-notes`.
 
-The `tag` job checks out and pushes using `secrets.RELEASE_PAT` (a fine-grained PAT with Contents: write). This is required — tags pushed with the default `GITHUB_TOKEN` do not trigger downstream workflows, so `release.yml` would never fire.
+The `tag` job checks out and pushes using `secrets.RELEASE_PAT` (a fine-grained PAT with **Contents: Read and write** on this repo, stored as a **repository** secret — environment secrets won't be visible to the job). This is required — tags pushed with the default `GITHUB_TOKEN` do not trigger downstream workflows, so `release.yml` would never fire. If the tag job fails with `403 denied to ttpears`, the PAT is missing the Contents:write grant or doesn't list this repo under its scoped repositories.
 
 Do not run `gh release create` or `npm publish` manually — bump the version, merge, and let CI handle both. If a release needs hand-holding, check `gh run list` for the failing workflow rather than reproducing steps locally.
 

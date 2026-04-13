@@ -177,6 +177,9 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 | `list_work_items` | List work items in a group or project, filtered by type and state |
 | `list_broadcast_messages` | List instance-wide broadcast messages |
 | `get_broadcast_message` | Get a specific broadcast message by ID |
+| `list_my_events` | Authenticated user's activity feed — pushes, MRs, comments, approvals |
+| `list_user_events` | Another user's public activity feed by username or ID |
+| `list_project_events` | Activity events for a specific project |
 | `resolve_path` | Resolve a path to a project or group |
 | `get_available_queries` | Discover available GraphQL operations |
 | `execute_custom_query` | Run custom GraphQL queries |
