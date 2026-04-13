@@ -173,6 +173,10 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 | `get_project_statistics` | Aggregate project stats dashboard |
 | `get_user_issues` | Get all issues assigned to a user |
 | `get_user_merge_requests` | Get MRs authored by or assigned to a user |
+| `get_work_item` | Fetch a work item (issue, task, epic, incident, OKR) by ID with full widget data |
+| `list_work_items` | List work items in a group or project, filtered by type and state |
+| `list_broadcast_messages` | List instance-wide broadcast messages |
+| `get_broadcast_message` | Get a specific broadcast message by ID |
 | `resolve_path` | Resolve a path to a project or group |
 | `get_available_queries` | Discover available GraphQL operations |
 | `execute_custom_query` | Run custom GraphQL queries |
@@ -186,6 +190,9 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 | `manage_pipeline` | Retry or cancel a CI/CD pipeline |
 | `update_issue` | Update title, description, assignees, labels, due date |
 | `update_merge_request` | Update title, description, assignees, reviewers, labels |
+| `create_broadcast_message` | Create a broadcast message (instance admin) |
+| `update_broadcast_message` | Update a broadcast message (instance admin) |
+| `delete_broadcast_message` | Delete a broadcast message (instance admin) |
 
 ---
 
