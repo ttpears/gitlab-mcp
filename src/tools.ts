@@ -1508,6 +1508,68 @@ const deleteBroadcastMessageTool: Tool = {
   },
 };
 
+const getWorkItemTool: Tool = {
+  name: 'get_work_item',
+  title: 'Get Work Item',
+  description:
+    'Fetch a GitLab work item (issue, task, epic, incident, OKR) by global ID. Returns the raw widgets array so epic hierarchy, health status, iteration, milestone, and dates are all visible. Accepts either a numeric id or a full gid (gid://gitlab/WorkItem/123).',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    id: z.string().describe('Work item ID — numeric (e.g. "123") or full gid (e.g. "gid://gitlab/WorkItem/123")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const result = await client.getWorkItem(input.id, credentials);
+    const wi = result.workItem;
+    if (!wi) return { workItem: null };
+    const widgetSummary = Array.isArray(wi.widgets)
+      ? wi.widgets.map((w: any) => w.type).filter(Boolean)
+      : [];
+    return { workItem: wi, widgetTypes: widgetSummary };
+  },
+};
+
+const listWorkItemsTool: Tool = {
+  name: 'list_work_items',
+  title: 'List Work Items',
+  description:
+    'List work items within a namespace (group or project fullPath). Supports filtering by type (ISSUE, TASK, EPIC, INCIDENT, OBJECTIVE, KEY_RESULT) and state, plus cursor pagination and fetchAll.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    fullPath: z.string().describe('Namespace full path — group (e.g. "my-group") or project (e.g. "my-group/my-project")'),
+    types: z
+      .array(z.enum(['ISSUE', 'TASK', 'EPIC', 'INCIDENT', 'OBJECTIVE', 'KEY_RESULT', 'TEST_CASE', 'REQUIREMENT']))
+      .optional()
+      .describe('Filter by work item types. Omit for all types.'),
+    state: z.enum(['opened', 'closed', 'all']).optional().describe('Filter by state. "all" returns every state.'),
+    first: z.number().int().min(1).max(100).default(20).describe('Page size (default 20, capped by server maxPageSize)'),
+    after: z.string().optional().describe('Cursor for next page'),
+    fetchAll: z.boolean().optional().describe('Auto-paginate up to first items'),
+    sort: z.string().optional().describe('Sort enum, e.g. UPDATED_DESC (default), CREATED_DESC, TITLE_ASC'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const stateArg = input.state && input.state !== 'all' ? input.state : undefined;
+    const result = await client.listWorkItems(
+      input.fullPath,
+      {
+        first: input.first,
+        after: input.after,
+        fetchAll: input.fetchAll,
+        types: input.types,
+        state: stateArg,
+        sort: input.sort,
+      },
+      credentials
+    );
+    return result;
+  },
+};
+
 export const readOnlyTools: Tool[] = [
   getProjectTool,
   getIssuesTool,
@@ -1526,6 +1588,8 @@ export const readOnlyTools: Tool[] = [
   getProjectStatisticsTool,
   listBroadcastMessagesTool,
   getBroadcastMessageTool,
+  getWorkItemTool,
+  listWorkItemsTool,
 ];
 
 export const userAuthTools: Tool[] = [
