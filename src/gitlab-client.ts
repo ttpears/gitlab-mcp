@@ -2534,4 +2534,86 @@ export class GitLabGraphQLClient {
   async deleteBroadcastMessage(id: number, userConfig?: UserConfig): Promise<any> {
     return this.restRequest('DELETE', `/broadcast_messages/${id}`, { userConfig, requiresWrite: true });
   }
+
+  async listMyEvents(
+    params: {
+      action?: string;
+      target_type?: string;
+      before?: string;
+      after?: string;
+      scope?: 'all';
+      sort?: 'asc' | 'desc';
+      page?: number;
+      per_page?: number;
+    },
+    userConfig?: UserConfig
+  ): Promise<any> {
+    return this.restRequest('GET', '/events', {
+      query: {
+        action: params.action,
+        target_type: params.target_type,
+        before: params.before,
+        after: params.after,
+        scope: params.scope,
+        sort: params.sort,
+        page: params.page ?? 1,
+        per_page: Math.min(params.per_page ?? 20, this.config.maxPageSize),
+      },
+      userConfig,
+    });
+  }
+
+  async listUserEvents(
+    userIdOrUsername: string | number,
+    params: {
+      action?: string;
+      target_type?: string;
+      before?: string;
+      after?: string;
+      sort?: 'asc' | 'desc';
+      page?: number;
+      per_page?: number;
+    },
+    userConfig?: UserConfig
+  ): Promise<any> {
+    return this.restRequest('GET', `/users/${encodeURIComponent(String(userIdOrUsername))}/events`, {
+      query: {
+        action: params.action,
+        target_type: params.target_type,
+        before: params.before,
+        after: params.after,
+        sort: params.sort,
+        page: params.page ?? 1,
+        per_page: Math.min(params.per_page ?? 20, this.config.maxPageSize),
+      },
+      userConfig,
+    });
+  }
+
+  async listProjectEvents(
+    projectIdOrPath: string | number,
+    params: {
+      action?: string;
+      target_type?: string;
+      before?: string;
+      after?: string;
+      sort?: 'asc' | 'desc';
+      page?: number;
+      per_page?: number;
+    },
+    userConfig?: UserConfig
+  ): Promise<any> {
+    return this.restRequest('GET', `/projects/${encodeURIComponent(String(projectIdOrPath))}/events`, {
+      query: {
+        action: params.action,
+        target_type: params.target_type,
+        before: params.before,
+        after: params.after,
+        sort: params.sort,
+        page: params.page ?? 1,
+        per_page: Math.min(params.per_page ?? 20, this.config.maxPageSize),
+      },
+      userConfig,
+    });
+  }
 }

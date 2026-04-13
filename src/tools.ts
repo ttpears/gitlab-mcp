@@ -1570,6 +1570,108 @@ const listWorkItemsTool: Tool = {
   },
 };
 
+const EventActionEnum = z
+  .enum([
+    'approved',
+    'closed',
+    'commented',
+    'created',
+    'destroyed',
+    'expired',
+    'joined',
+    'left',
+    'merged',
+    'pushed',
+    'reopened',
+    'updated',
+  ])
+  .optional()
+  .describe('Filter by action type');
+
+const EventTargetTypeEnum = z
+  .enum(['issue', 'milestone', 'merge_request', 'note', 'project', 'snippet', 'user'])
+  .optional()
+  .describe('Filter by target resource type');
+
+const EventCommonFields = {
+  action: EventActionEnum,
+  target_type: EventTargetTypeEnum,
+  before: z.string().optional().describe('Only events before this date (YYYY-MM-DD)'),
+  after: z.string().optional().describe('Only events after this date (YYYY-MM-DD)'),
+  sort: z.enum(['asc', 'desc']).default('desc').describe('Sort order (default desc — newest first)'),
+  page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
+  per_page: z.number().int().min(1).max(100).default(20).describe('Results per page'),
+};
+
+const listMyEventsTool: Tool = {
+  name: 'list_my_events',
+  title: 'My Events',
+  description:
+    'List the authenticated user\'s GitLab activity feed — pushes, MRs, comments, approvals, issue actions. Primary tool for "what did I just do". Requires user authentication.',
+  requiresAuth: true,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    ...EventCommonFields,
+    scope: z
+      .enum(['all'])
+      .optional()
+      .describe('Set to "all" to include events from any project you have access to, not just your own authored events'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('list_my_events requires user authentication — the feed is scoped to the caller.');
+    }
+    const { userCredentials, ...params } = input;
+    return client.listMyEvents(params, credentials);
+  },
+};
+
+const listUserEventsTool: Tool = {
+  name: 'list_user_events',
+  title: 'User Events',
+  description:
+    'List a specific user\'s public GitLab activity feed by username or numeric ID. Use for tracking what a teammate has been working on.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    user: z
+      .string()
+      .min(1)
+      .describe('Username (e.g. "alice") or numeric user ID'),
+    ...EventCommonFields,
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const { userCredentials, user, ...params } = input;
+    return client.listUserEvents(user.trim(), params, credentials);
+  },
+};
+
+const listProjectEventsTool: Tool = {
+  name: 'list_project_events',
+  title: 'Project Events',
+  description:
+    'List activity events for a single GitLab project — commits pushed, MRs opened/merged, issues touched, notes added. Accepts project full path or numeric ID.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    project: z
+      .string()
+      .min(1)
+      .describe('Project full path (e.g. "group/my-project") or numeric project ID'),
+    ...EventCommonFields,
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const { userCredentials, project, ...params } = input;
+    return client.listProjectEvents(project.trim(), params, credentials);
+  },
+};
+
 export const readOnlyTools: Tool[] = [
   getProjectTool,
   getIssuesTool,
@@ -1590,6 +1692,9 @@ export const readOnlyTools: Tool[] = [
   getBroadcastMessageTool,
   getWorkItemTool,
   listWorkItemsTool,
+  listUserEventsTool,
+  listProjectEventsTool,
+  listMyEventsTool,
 ];
 
 export const userAuthTools: Tool[] = [
