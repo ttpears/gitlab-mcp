@@ -1394,6 +1394,120 @@ const getUserMergeRequestsTool: Tool = {
   },
 };
 
+const BroadcastMessageFields = {
+  message: z.string().min(1).describe('Message text to display'),
+  starts_at: z.string().datetime().optional().describe('ISO 8601 timestamp when the message starts'),
+  ends_at: z.string().datetime().optional().describe('ISO 8601 timestamp when the message ends'),
+  color: z.string().optional().describe('Background color in hex format, e.g. "#E75E40"'),
+  font: z.string().optional().describe('Foreground (font) color in hex format'),
+  target_access_levels: z.array(z.number().int()).optional().describe('Access levels to target: 10=Guest, 20=Reporter, 30=Developer, 40=Maintainer, 50=Owner'),
+  target_path: z.string().optional().describe('Path glob for pages where the message should appear'),
+  broadcast_type: z.enum(['banner', 'notification']).optional().describe('Broadcast type: "banner" or "notification"'),
+  dismissable: z.boolean().optional().describe('Whether users can dismiss the broadcast message'),
+  theme: z.string().optional().describe('Theme name (GitLab 16.9+), e.g. "indigo", "red"'),
+};
+
+const listBroadcastMessagesTool: Tool = {
+  name: 'list_broadcast_messages',
+  title: 'List Broadcast Messages',
+  description: 'List all GitLab broadcast messages (instance-wide announcements). Read-only.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    page: z.number().int().min(1).default(1).describe('Page number (1-based)'),
+    perPage: z.number().int().min(1).max(100).default(20).describe('Results per page'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.listBroadcastMessages(input.page, input.perPage, credentials);
+  },
+};
+
+const getBroadcastMessageTool: Tool = {
+  name: 'get_broadcast_message',
+  title: 'Get Broadcast Message',
+  description: 'Get a specific GitLab broadcast message by ID.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    id: z.number().int().describe('Broadcast message ID'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.getBroadcastMessage(input.id, credentials);
+  },
+};
+
+const createBroadcastMessageTool: Tool = {
+  name: 'create_broadcast_message',
+  title: 'Create Broadcast Message',
+  description: 'Create a GitLab broadcast message. Requires administrator privileges on the GitLab instance.',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  inputSchema: withUserAuth(z.object(BroadcastMessageFields)),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for creating broadcast messages.');
+    }
+    const { userCredentials, ...body } = input;
+    return client.createBroadcastMessage(body, credentials);
+  },
+};
+
+const updateBroadcastMessageTool: Tool = {
+  name: 'update_broadcast_message',
+  title: 'Update Broadcast Message',
+  description: 'Update an existing GitLab broadcast message. Requires administrator privileges.',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    id: z.number().int().describe('Broadcast message ID'),
+    message: BroadcastMessageFields.message.optional(),
+    starts_at: BroadcastMessageFields.starts_at,
+    ends_at: BroadcastMessageFields.ends_at,
+    color: BroadcastMessageFields.color,
+    font: BroadcastMessageFields.font,
+    target_access_levels: BroadcastMessageFields.target_access_levels,
+    target_path: BroadcastMessageFields.target_path,
+    broadcast_type: BroadcastMessageFields.broadcast_type,
+    dismissable: BroadcastMessageFields.dismissable,
+    theme: BroadcastMessageFields.theme,
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for updating broadcast messages.');
+    }
+    const { id, userCredentials, ...body } = input;
+    return client.updateBroadcastMessage(id, body, credentials);
+  },
+};
+
+const deleteBroadcastMessageTool: Tool = {
+  name: 'delete_broadcast_message',
+  title: 'Delete Broadcast Message',
+  description: 'Delete a GitLab broadcast message by ID. Requires administrator privileges.',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    id: z.number().int().describe('Broadcast message ID'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for deleting broadcast messages.');
+    }
+    await client.deleteBroadcastMessage(input.id, credentials);
+    return { id: input.id, deleted: true };
+  },
+};
+
 export const readOnlyTools: Tool[] = [
   getProjectTool,
   getIssuesTool,
@@ -1410,6 +1524,8 @@ export const readOnlyTools: Tool[] = [
   getTimeTrackingTool,
   getMergeRequestReviewersTool,
   getProjectStatisticsTool,
+  listBroadcastMessagesTool,
+  getBroadcastMessageTool,
 ];
 
 export const userAuthTools: Tool[] = [
@@ -1422,6 +1538,9 @@ export const writeTools: Tool[] = [
   createMergeRequestTool,
   createNoteTool,
   managePipelineTool,
+  createBroadcastMessageTool,
+  updateBroadcastMessageTool,
+  deleteBroadcastMessageTool,
 ];
 
 export const searchTools: Tool[] = [
