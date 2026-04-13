@@ -509,6 +509,120 @@ export class GitLabGraphQLClient {
     return this.query(query, { projectPath, first: Math.min(first, this.config.maxPageSize), after, sort: sort || 'UPDATED_DESC' }, userConfig);
   }
 
+  async getWorkItem(id: string, userConfig?: UserConfig): Promise<any> {
+    const gid = id.startsWith('gid://') ? id : `gid://gitlab/WorkItem/${id}`;
+    const query = gql`
+      query getWorkItem($id: WorkItemID!) {
+        workItem(id: $id) {
+          id
+          iid
+          title
+          state
+          confidential
+          createdAt
+          updatedAt
+          closedAt
+          webUrl
+          workItemType { id name iconName }
+          author { username name }
+          namespace { id fullPath }
+          widgets {
+            type
+            ... on WorkItemWidgetDescription { description descriptionHtml }
+            ... on WorkItemWidgetAssignees {
+              assignees { nodes { username name webUrl } }
+            }
+            ... on WorkItemWidgetLabels {
+              labels { nodes { id title color description } }
+            }
+            ... on WorkItemWidgetHierarchy {
+              hasChildren
+              hasParent
+              parent { id iid title workItemType { name } webUrl }
+              children {
+                nodes { id iid title state workItemType { name } webUrl }
+              }
+            }
+            ... on WorkItemWidgetMilestone {
+              milestone { id title state dueDate webPath }
+            }
+            ... on WorkItemWidgetStartAndDueDate { startDate dueDate }
+            ... on WorkItemWidgetNotes {
+              discussions(first: 5) {
+                nodes {
+                  id
+                  notes { nodes { id body author { username } createdAt } }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { id: gid }, userConfig);
+  }
+
+  async listWorkItems(
+    fullPath: string,
+    opts: {
+      first?: number;
+      after?: string;
+      fetchAll?: boolean;
+      types?: string[];
+      state?: string;
+      sort?: string;
+    } = {},
+    userConfig?: UserConfig
+  ): Promise<any> {
+    const { first = 20, after, fetchAll = false, types, state, sort = 'UPDATED_DESC' } = opts;
+    const query = gql`
+      query listWorkItems(
+        $fullPath: ID!
+        $first: Int!
+        $after: String
+        $types: [IssueType!]
+        $state: IssuableState
+        $sort: WorkItemSort
+      ) {
+        namespace(fullPath: $fullPath) {
+          id
+          fullPath
+          workItems(first: $first, after: $after, types: $types, state: $state, sort: $sort) {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes {
+              id
+              iid
+              title
+              state
+              confidential
+              createdAt
+              updatedAt
+              webUrl
+              workItemType { name iconName }
+              author { username name }
+            }
+          }
+        }
+      }
+    `;
+
+    const variables: Record<string, any> = { fullPath, types, state, sort };
+
+    if (fetchAll) {
+      return this.fetchAllPages(query, variables, 'namespace.workItems', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+    }
+
+    return this.query(
+      query,
+      { ...variables, first: Math.min(first, this.config.maxPageSize), after },
+      userConfig
+    );
+  }
+
   async createIssue(projectPath: string, title: string, description?: string, userConfig?: UserConfig): Promise<any> {
     await this.introspectSchema(userConfig);
     const mutationType = this.schema?.getMutationType();
