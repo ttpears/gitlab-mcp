@@ -2295,4 +2295,129 @@ export class GitLabGraphQLClient {
       return this.query(query, { fullPath, search, first: Math.min(first, this.config.maxPageSize), after }, userConfig);
     }
   }
+
+  /**
+   * Resolve the GitLab base URL and access token for a REST call, honoring
+   * per-request user credentials and falling back to the shared token.
+   */
+  private resolveRestAuth(userConfig?: UserConfig, requiresWrite = false): { baseUrl: string; token: string } {
+    if (userConfig) {
+      return {
+        baseUrl: userConfig.gitlabUrl || this.config.gitlabUrl,
+        token: userConfig.accessToken,
+      };
+    }
+    if (requiresWrite) {
+      throw new Error('Write operations require user authentication. Please provide your GitLab credentials.');
+    }
+    if (this.config.sharedAccessToken && this.config.authMode !== 'per-user') {
+      return { baseUrl: this.config.gitlabUrl, token: this.config.sharedAccessToken };
+    }
+    throw new Error('This operation requires user authentication. Please provide your GitLab credentials.');
+  }
+
+  /**
+   * Perform a GitLab REST API v4 request. Used for endpoints not exposed via GraphQL
+   * (e.g., broadcast messages).
+   */
+  private async restRequest<T = any>(
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    path: string,
+    options: { body?: any; query?: Record<string, any>; userConfig?: UserConfig; requiresWrite?: boolean } = {}
+  ): Promise<T> {
+    const { baseUrl, token } = this.resolveRestAuth(options.userConfig, options.requiresWrite);
+    const url = new URL(`${baseUrl.replace(/\/$/, '')}/api/v4${path}`);
+    if (options.query) {
+      for (const [k, v] of Object.entries(options.query)) {
+        if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+      }
+    }
+
+    const timeoutMs = this.config.defaultTimeout || 30000;
+
+    return this.executeWithRetry(async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetch(url.toString(), {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const statusCode = response.status;
+          let message = `${response.statusText}`;
+          try {
+            const errBody: any = await response.json();
+            message = errBody?.message || errBody?.error || JSON.stringify(errBody);
+          } catch {
+            // non-JSON body
+          }
+          const retryable = RETRY_CONFIG.retryableStatusCodes.includes(statusCode);
+          throw new GitLabAPIError(`GitLab REST ${method} ${path} failed (${statusCode}): ${message}`, {
+            code: statusCode === 401 ? 'AUTH_FAILED' : statusCode === 403 ? 'FORBIDDEN' : 'HTTP_ERROR',
+            statusCode,
+            isRetryable: retryable,
+          });
+        }
+
+        if (response.status === 204) return undefined as unknown as T;
+        const text = await response.text();
+        return (text ? JSON.parse(text) : undefined) as T;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }, `REST ${method} ${path}`);
+  }
+
+  async listBroadcastMessages(page = 1, perPage = 20, userConfig?: UserConfig): Promise<any> {
+    return this.restRequest('GET', '/broadcast_messages', {
+      query: { page, per_page: Math.min(perPage, this.config.maxPageSize) },
+      userConfig,
+    });
+  }
+
+  async getBroadcastMessage(id: number, userConfig?: UserConfig): Promise<any> {
+    return this.restRequest('GET', `/broadcast_messages/${id}`, { userConfig });
+  }
+
+  async createBroadcastMessage(input: {
+    message: string;
+    starts_at?: string;
+    ends_at?: string;
+    color?: string;
+    font?: string;
+    target_access_levels?: number[];
+    target_path?: string;
+    broadcast_type?: 'banner' | 'notification';
+    dismissable?: boolean;
+    theme?: string;
+  }, userConfig?: UserConfig): Promise<any> {
+    return this.restRequest('POST', '/broadcast_messages', { body: input, userConfig, requiresWrite: true });
+  }
+
+  async updateBroadcastMessage(id: number, input: {
+    message?: string;
+    starts_at?: string;
+    ends_at?: string;
+    color?: string;
+    font?: string;
+    target_access_levels?: number[];
+    target_path?: string;
+    broadcast_type?: 'banner' | 'notification';
+    dismissable?: boolean;
+    theme?: string;
+  }, userConfig?: UserConfig): Promise<any> {
+    return this.restRequest('PUT', `/broadcast_messages/${id}`, { body: input, userConfig, requiresWrite: true });
+  }
+
+  async deleteBroadcastMessage(id: number, userConfig?: UserConfig): Promise<any> {
+    return this.restRequest('DELETE', `/broadcast_messages/${id}`, { userConfig, requiresWrite: true });
+  }
 }
