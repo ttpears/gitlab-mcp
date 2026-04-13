@@ -43,6 +43,8 @@ Releases are fully automated from `package.json` version bumps on `main`:
 2. `.github/workflows/ci.yml` builds, then the `tag` job creates and pushes `vX.Y.Z` (skipped if the tag already exists).
 3. `.github/workflows/release.yml` fires on tag push and runs `npm publish --provenance` plus `gh release create --generate-notes`.
 
+The `tag` job checks out and pushes using `secrets.RELEASE_PAT` (a fine-grained PAT with Contents: write). This is required — tags pushed with the default `GITHUB_TOKEN` do not trigger downstream workflows, so `release.yml` would never fire.
+
 Do not run `gh release create` or `npm publish` manually — bump the version, merge, and let CI handle both. If a release needs hand-holding, check `gh run list` for the failing workflow rather than reproducing steps locally.
 
 `main` is protected: changes ship via PR, not direct push.

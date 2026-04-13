@@ -29,10 +29,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Use a PAT so the tag push triggers release.yml.
+          # The default GITHUB_TOKEN cannot trigger other workflows.
+          token: ${{ secrets.RELEASE_PAT }}
 
       - name: Tag if package.json version changed
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
         run: |
           version=$(node -p "require('./package.json').version")
           tag="v${version}"
