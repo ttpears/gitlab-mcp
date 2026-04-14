@@ -39,7 +39,7 @@ When adding a new tool, mirror an existing one of the same shape (list/search/up
 
 Releases are fully automated from `package.json` version bumps on `main`:
 
-1. Bump `version` in `package.json` **and** sync `package-lock.json` (`npm install --package-lock-only`), then merge to `main`. Forgetting the lockfile won't fail CI but leaves it drifted.
+1. Bump `version` in `package.json`, mirror it in `.claude-plugin/plugin.json`, **and** sync `package-lock.json` (`npm install --package-lock-only`), then merge to `main`. Forgetting the lockfile won't fail CI but leaves it drifted. The plugin manifest version is what Claude Code's plugin cache keys on — if it drifts from the npm version, installs via the marketplace point at a different release than users think.
 2. `.github/workflows/ci.yml` builds, then the `tag` job creates and pushes `vX.Y.Z` (skipped if the tag already exists).
 3. `.github/workflows/release.yml` fires on tag push and runs `npm publish --provenance` plus `gh release create --generate-notes`.
 
