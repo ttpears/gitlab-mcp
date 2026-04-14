@@ -24,9 +24,10 @@ jobs:
       - run: npm run build
 
       - name: Publish to npm with provenance
+        # Uses npm trusted publishing via GitHub OIDC (id-token: write).
+        # No NPM_TOKEN needed — the npm CLI exchanges the Actions OIDC token
+        # for a short-lived registry token at publish time.
         run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         env:
