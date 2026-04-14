@@ -22,6 +22,9 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      # Trusted publishing (OIDC) requires npm >= 11.5.1; Node 20 ships with npm 10.x
+      - run: npm install -g npm@latest
+
       - name: Publish to npm with provenance
         # Uses npm trusted publishing via GitHub OIDC (id-token: write).
         # No NPM_TOKEN needed — the npm CLI exchanges the Actions OIDC token
