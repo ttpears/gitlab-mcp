@@ -2616,4 +2616,66 @@ export class GitLabGraphQLClient {
       userConfig,
     });
   }
+
+  async listOpenMergeRequestsForReviewQueue(
+    scope: { type: 'group' | 'project'; fullPath: string },
+    opts: { maxItems?: number } = {},
+    userConfig?: UserConfig,
+  ): Promise<PaginatedResult<any>> {
+    const maxItems = opts.maxItems ?? 1000;
+    const groupQuery = gql`
+      query reviewQueueGroup($fullPath: ID!, $first: Int!, $after: String) {
+        group(fullPath: $fullPath) {
+          mergeRequests(state: opened, sort: UPDATED_ASC, first: $first, after: $after) {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes {
+              iid
+              title
+              webUrl
+              draft
+              createdAt
+              updatedAt
+              author { username }
+              reviewers { nodes { username } }
+              project { fullPath }
+            }
+          }
+        }
+      }
+    `;
+    const projectQuery = gql`
+      query reviewQueueProject($fullPath: ID!, $first: Int!, $after: String) {
+        project(fullPath: $fullPath) {
+          fullPath
+          mergeRequests(state: opened, sort: UPDATED_ASC, first: $first, after: $after) {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes {
+              iid
+              title
+              webUrl
+              draft
+              createdAt
+              updatedAt
+              author { username }
+              reviewers { nodes { username } }
+            }
+          }
+        }
+      }
+    `;
+    if (scope.type === 'group') {
+      return this.fetchAllPages(
+        groupQuery,
+        { fullPath: scope.fullPath },
+        'group.mergeRequests',
+        { maxItems, pageSize: this.config.maxPageSize, userConfig },
+      );
+    }
+    return this.fetchAllPages(
+      projectQuery,
+      { fullPath: scope.fullPath },
+      'project.mergeRequests',
+      { maxItems, pageSize: this.config.maxPageSize, userConfig },
+    );
+  }
 }

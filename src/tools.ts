@@ -1750,6 +1750,159 @@ const analyticsUserSummaryTool: Tool = {
   },
 };
 
+const REVIEW_BUCKETS = ['<1d', '1-3d', '3-7d', '7-14d', '>14d'] as const;
+type ReviewBucket = typeof REVIEW_BUCKETS[number];
+
+function emptyReviewBuckets(): Record<ReviewBucket, number> {
+  return { '<1d': 0, '1-3d': 0, '3-7d': 0, '7-14d': 0, '>14d': 0 };
+}
+
+function bucketForAge(ageDays: number): ReviewBucket {
+  if (ageDays < 1) return '<1d';
+  if (ageDays < 3) return '1-3d';
+  if (ageDays < 7) return '3-7d';
+  if (ageDays < 14) return '7-14d';
+  return '>14d';
+}
+
+const analyticsReviewBottlenecksTool: Tool = {
+  name: 'analytics_review_bottlenecks',
+  title: 'Review Bottlenecks',
+  description:
+    'Aggregate open (non-draft) merge requests across a group or project to surface review bottlenecks. Returns per-reviewer queue stats, age-bucket histogram, and the stalest MRs by updatedAt. MRs with no reviewer assigned are bucketed under "(unassigned)".',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    group: z.string().optional().describe('Group full path (e.g. "my-group"). Mutually exclusive with `project`.'),
+    project: z.string().optional().describe('Project full path (e.g. "my-group/my-project"). Mutually exclusive with `group`.'),
+    staleAfterDays: z.number().int().min(0).default(3).describe('An MR counts as "stale" if its updatedAt is older than this many days. Default 3.'),
+    topStalest: z.number().int().min(1).max(200).default(20).describe('Cap on the stalest[] list. Default 20.'),
+    maxMRs: z.number().int().min(1).max(5000).default(1000).describe('Hard cap on MRs scanned. Envelope flags `truncated:true` if reached.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const group = input.group?.trim();
+    const project = input.project?.trim();
+    if ((!group && !project) || (group && project)) {
+      throw new Error('analytics_review_bottlenecks requires exactly one of `group` or `project`.');
+    }
+    const scope: { type: 'group' | 'project'; fullPath: string } = group
+      ? { type: 'group', fullPath: group }
+      : { type: 'project', fullPath: project! };
+
+    const page = await client.listOpenMergeRequestsForReviewQueue(
+      scope,
+      { maxItems: input.maxMRs },
+      credentials,
+    );
+    const truncated = !!page.hasMore;
+    const rawNodes: any[] = Array.isArray(page.nodes) ? page.nodes : [];
+    const mrs = rawNodes.filter((mr) => !mr.draft);
+
+    const now = Date.now();
+    const staleAfterMs = input.staleAfterDays * 86400000;
+
+    type EnrichedMR = {
+      projectFullPath: string;
+      iid: string;
+      title: string;
+      webUrl: string;
+      author: string | null;
+      reviewers: string[];
+      ageDays: number;
+      ageMs: number;
+      updatedAt: string;
+      bucket: ReviewBucket;
+    };
+
+    const enriched: EnrichedMR[] = mrs.map((mr) => {
+      const updatedAtStr: string = mr.updatedAt;
+      const ageMs = now - new Date(updatedAtStr).getTime();
+      const ageDays = Math.floor(ageMs / 86400000);
+      const reviewers: string[] = Array.isArray(mr.reviewers?.nodes)
+        ? mr.reviewers.nodes.map((r: any) => r?.username).filter(Boolean)
+        : [];
+      const projectFullPath: string =
+        mr.project?.fullPath ?? (scope.type === 'project' ? scope.fullPath : '');
+      return {
+        projectFullPath,
+        iid: String(mr.iid),
+        title: mr.title,
+        webUrl: mr.webUrl,
+        author: mr.author?.username ?? null,
+        reviewers,
+        ageDays,
+        ageMs,
+        updatedAt: updatedAtStr,
+        bucket: bucketForAge(ageDays),
+      };
+    });
+
+    const totals = {
+      mrs: enriched.length,
+      stale: enriched.filter((m) => m.ageMs >= staleAfterMs).length,
+      unassigned: enriched.filter((m) => m.reviewers.length === 0).length,
+    };
+
+    const buckets = emptyReviewBuckets();
+    for (const m of enriched) buckets[m.bucket]++;
+
+    type ReviewerAgg = {
+      reviewer: string;
+      total: number;
+      stale: number;
+      oldestAgeDays: number;
+      buckets: Record<ReviewBucket, number>;
+    };
+    const reviewerMap = new Map<string, ReviewerAgg>();
+    for (const m of enriched) {
+      const keys = m.reviewers.length ? m.reviewers : ['(unassigned)'];
+      for (const key of keys) {
+        let agg = reviewerMap.get(key);
+        if (!agg) {
+          agg = { reviewer: key, total: 0, stale: 0, oldestAgeDays: 0, buckets: emptyReviewBuckets() };
+          reviewerMap.set(key, agg);
+        }
+        agg.total++;
+        if (m.ageMs >= staleAfterMs) agg.stale++;
+        if (m.ageDays > agg.oldestAgeDays) agg.oldestAgeDays = m.ageDays;
+        agg.buckets[m.bucket]++;
+      }
+    }
+    const byReviewer = Array.from(reviewerMap.values()).sort((a, b) => {
+      if (b.stale !== a.stale) return b.stale - a.stale;
+      return b.total - a.total;
+    });
+
+    const stalest = enriched
+      .slice()
+      .sort((a, b) => b.ageMs - a.ageMs)
+      .slice(0, input.topStalest)
+      .map((m) => ({
+        projectFullPath: m.projectFullPath,
+        iid: m.iid,
+        title: m.title,
+        webUrl: m.webUrl,
+        author: m.author,
+        reviewers: m.reviewers,
+        ageDays: m.ageDays,
+        updatedAt: m.updatedAt,
+      }));
+
+    return {
+      scope: { type: scope.type, fullPath: scope.fullPath },
+      generatedAt: new Date().toISOString(),
+      staleAfterDays: input.staleAfterDays,
+      totals,
+      buckets,
+      byReviewer,
+      stalest,
+      truncated,
+    };
+  },
+};
+
 export const readOnlyTools: Tool[] = [
   getProjectTool,
   getIssuesTool,
@@ -1774,6 +1927,7 @@ export const readOnlyTools: Tool[] = [
   listProjectEventsTool,
   listMyEventsTool,
   analyticsUserSummaryTool,
+  analyticsReviewBottlenecksTool,
 ];
 
 export const userAuthTools: Tool[] = [
