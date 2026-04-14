@@ -1,12 +1,12 @@
 {
   "name": "@ttpears/gitlab-mcp-server",
-  "version": "1.12.0",
+  "version": "1.12.1",
   "description": "GitLab MCP Server with GraphQL discovery",
   "main": "dist/index.js",
   "module": "./src/index.ts",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/index.js",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
     "test": "jest",
