@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { GitLabGraphQLClient } from './gitlab-client.js';
 import { validateUserConfig, type UserConfig } from './config.js';
+import {
+  resolveWindow,
+  fetchUserEventsInWindow,
+  bucketBy,
+  countByAction,
+  buildEnvelope,
+  type NormalizedEvent,
+} from './analytics.js';
 
 export interface Tool {
   name: string;
@@ -1672,6 +1680,76 @@ const listProjectEventsTool: Tool = {
   },
 };
 
+// ─── Analytics (computed aggregates) ─────────────────────────────────────────
+
+const analyticsUserSummaryTool: Tool = {
+  name: 'analytics_user_summary',
+  title: 'User Activity Summary',
+  description:
+    'Aggregated activity summary for a user over a time window — totals by action type (pushes, MRs opened/merged, comments, approvals), breakdown by project and by day. Use this instead of list_user_events when you want counts rather than a raw event feed.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    user: z
+      .string()
+      .min(1)
+      .describe('Username (e.g. "alice") or numeric user ID'),
+    since: z
+      .string()
+      .describe('ISO date/datetime, inclusive lower bound (e.g. "2026-03-01" or "2026-03-01T00:00:00Z")'),
+    until: z
+      .string()
+      .optional()
+      .describe('ISO date/datetime, inclusive upper bound. Defaults to now.'),
+    maxEvents: z
+      .number()
+      .int()
+      .min(1)
+      .max(5000)
+      .optional()
+      .describe('Cap on events fetched. Defaults to 2000; returned envelope has truncated:true if reached.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const user = input.user.trim();
+    const window = resolveWindow(input.since, input.until);
+
+    const { events, truncated } = await fetchUserEventsInWindow(
+      client,
+      user,
+      { window, maxEvents: input.maxEvents },
+      credentials,
+    );
+
+    const byProject: Array<{
+      projectId: number;
+      projectPath: string | null;
+      totals: ReturnType<typeof countByAction>;
+    }> = [];
+    for (const [projectId, bucket] of bucketBy(events, (e: NormalizedEvent) => e.projectId)) {
+      byProject.push({ projectId, projectPath: null, totals: countByAction(bucket) });
+    }
+    byProject.sort((a, b) => b.totals.events - a.totals.events);
+
+    const byDay: Array<{ date: string; totals: ReturnType<typeof countByAction> }> = [];
+    for (const [date, bucket] of bucketBy(events, (e: NormalizedEvent) =>
+      e.createdAt.toISOString().slice(0, 10),
+    )) {
+      byDay.push({ date, totals: countByAction(bucket) });
+    }
+    byDay.sort((a, b) => a.date.localeCompare(b.date));
+
+    return buildEnvelope(
+      { type: 'user', identifier: user },
+      window,
+      events,
+      { byProject, byDay },
+      truncated,
+    );
+  },
+};
+
 export const readOnlyTools: Tool[] = [
   getProjectTool,
   getIssuesTool,
@@ -1695,6 +1773,7 @@ export const readOnlyTools: Tool[] = [
   listUserEventsTool,
   listProjectEventsTool,
   listMyEventsTool,
+  analyticsUserSummaryTool,
 ];
 
 export const userAuthTools: Tool[] = [

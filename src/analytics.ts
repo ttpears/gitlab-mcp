@@ -11,6 +11,7 @@ export interface NormalizedEvent {
   createdAt: Date;
   action: CanonicalAction;
   rawAction: string;
+  unknownAction: boolean;
   targetType: string | null;
   projectId: number | null;
   authorId: number | null;
@@ -103,19 +104,18 @@ export function normalizeAction(
 
 export function toNormalizedEvent(raw: any): NormalizedEvent {
   const { action, unknown } = normalizeAction(raw.action_name ?? '', raw.target_type ?? null);
-  const ne: NormalizedEvent = {
+  return {
     id: raw.id,
     createdAt: new Date(raw.created_at),
     action,
     rawAction: raw.action_name ?? '',
+    unknownAction: unknown,
     targetType: raw.target_type ?? null,
     projectId: raw.project_id ?? null,
     authorId: raw.author_id ?? null,
     authorUsername: raw.author_username ?? raw.author?.username ?? null,
     raw,
   };
-  (ne as any).__unknownAction = unknown;
-  return ne;
 }
 
 export interface FetchEventsOptions {
@@ -128,7 +128,6 @@ export interface FetchEventsOptions {
 export interface FetchEventsResult {
   events: NormalizedEvent[];
   truncated: boolean;
-  warnings: string[];
 }
 
 type PageFetcher = (page: number, perPage: number) => Promise<any[]>;
@@ -137,10 +136,11 @@ async function paginateUntilWindow(
   fetcher: PageFetcher,
   window: Window,
   maxEvents: number,
-): Promise<{ events: NormalizedEvent[]; truncated: boolean }> {
+): Promise<FetchEventsResult> {
   const out: NormalizedEvent[] = [];
   let page = 1;
-  while (out.length < maxEvents) {
+  let truncated = false;
+  outer: while (true) {
     const batch = await fetcher(page, PAGE_SIZE);
     if (!Array.isArray(batch) || batch.length === 0) break;
 
@@ -153,14 +153,29 @@ async function paginateUntilWindow(
       }
       if (ne.createdAt > window.until) continue;
       out.push(ne);
-      if (out.length >= maxEvents) break;
+      if (out.length >= maxEvents) {
+        truncated = true;
+        break outer;
+      }
     }
 
     if (crossedSince) break;
     if (batch.length < PAGE_SIZE) break;
     page++;
   }
-  return { events: out, truncated: out.length >= maxEvents };
+  return { events: out, truncated };
+}
+
+function widenWindowForRestParams(window: Window): { after: string; before: string } {
+  // GitLab's events REST API takes date-only params (YYYY-MM-DD) and treats
+  // `after` as exclusive (> date) and `before` as exclusive (< date). Widen
+  // by one day on each side so sub-day precision in the in-memory filter
+  // inside paginateUntilWindow is the source of truth.
+  const after = new Date(window.since);
+  after.setUTCDate(after.getUTCDate() - 1);
+  const before = new Date(window.until);
+  before.setUTCDate(before.getUTCDate() + 1);
+  return { after: toDateParam(after), before: toDateParam(before) };
 }
 
 export async function fetchUserEventsInWindow(
@@ -170,25 +185,17 @@ export async function fetchUserEventsInWindow(
   userConfig?: UserConfig,
 ): Promise<FetchEventsResult> {
   const maxEvents = opts.maxEvents ?? MAX_EVENTS_DEFAULT;
-  const { events, truncated } = await paginateUntilWindow(
+  const { after, before } = widenWindowForRestParams(opts.window);
+  return paginateUntilWindow(
     (page, per_page) =>
       client.listUserEvents(
         username,
-        {
-          action: opts.action,
-          target_type: opts.targetType,
-          after: toDateParam(opts.window.since),
-          before: toDateParam(opts.window.until),
-          sort: 'desc',
-          page,
-          per_page,
-        },
+        { action: opts.action, target_type: opts.targetType, after, before, sort: 'desc', page, per_page },
         userConfig,
       ),
     opts.window,
     maxEvents,
   );
-  return { events, truncated, warnings: collectWarnings(events) };
 }
 
 export async function fetchProjectEventsInWindow(
@@ -198,25 +205,17 @@ export async function fetchProjectEventsInWindow(
   userConfig?: UserConfig,
 ): Promise<FetchEventsResult> {
   const maxEvents = opts.maxEvents ?? MAX_EVENTS_DEFAULT;
-  const { events, truncated } = await paginateUntilWindow(
+  const { after, before } = widenWindowForRestParams(opts.window);
+  return paginateUntilWindow(
     (page, per_page) =>
       client.listProjectEvents(
         projectIdOrPath,
-        {
-          action: opts.action,
-          target_type: opts.targetType,
-          after: toDateParam(opts.window.since),
-          before: toDateParam(opts.window.until),
-          sort: 'desc',
-          page,
-          per_page,
-        },
+        { action: opts.action, target_type: opts.targetType, after, before, sort: 'desc', page, per_page },
         userConfig,
       ),
     opts.window,
     maxEvents,
   );
-  return { events, truncated, warnings: collectWarnings(events) };
 }
 
 export async function fetchMyEventsInWindow(
@@ -225,24 +224,16 @@ export async function fetchMyEventsInWindow(
   userConfig?: UserConfig,
 ): Promise<FetchEventsResult> {
   const maxEvents = opts.maxEvents ?? MAX_EVENTS_DEFAULT;
-  const { events, truncated } = await paginateUntilWindow(
+  const { after, before } = widenWindowForRestParams(opts.window);
+  return paginateUntilWindow(
     (page, per_page) =>
       client.listMyEvents(
-        {
-          action: opts.action,
-          target_type: opts.targetType,
-          after: toDateParam(opts.window.since),
-          before: toDateParam(opts.window.until),
-          sort: 'desc',
-          page,
-          per_page,
-        },
+        { action: opts.action, target_type: opts.targetType, after, before, sort: 'desc', page, per_page },
         userConfig,
       ),
     opts.window,
     maxEvents,
   );
-  return { events, truncated, warnings: collectWarnings(events) };
 }
 
 function toDateParam(d: Date): string {
@@ -252,7 +243,7 @@ function toDateParam(d: Date): string {
 function collectWarnings(events: NormalizedEvent[]): string[] {
   const unknowns = new Set<string>();
   for (const e of events) {
-    if ((e as any).__unknownAction) unknowns.add(e.rawAction || '(empty)');
+    if (e.unknownAction) unknowns.add(e.rawAction || '(empty)');
   }
   return unknowns.size
     ? [`Unrecognized event action(s): ${Array.from(unknowns).join(', ')}`]
@@ -306,7 +297,6 @@ export function buildEnvelope<T>(
   events: NormalizedEvent[],
   breakdowns: T,
   truncated: boolean,
-  extraWarnings: string[] = [],
 ): AnalyticsEnvelope<T> {
   return {
     window: { since: window.since.toISOString(), until: window.until.toISOString() },
@@ -314,6 +304,6 @@ export function buildEnvelope<T>(
     totals: countByAction(events),
     breakdowns,
     truncated,
-    warnings: [...collectWarnings(events), ...extraWarnings],
+    warnings: collectWarnings(events),
   };
 }
