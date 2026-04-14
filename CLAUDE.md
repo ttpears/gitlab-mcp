@@ -41,7 +41,7 @@ Releases are fully automated from `package.json` version bumps on `main`:
 
 1. Bump `version` in `package.json`, mirror it in `.claude-plugin/plugin.json`, **and** sync `package-lock.json` (`npm install --package-lock-only`), then merge to `main`. Forgetting the lockfile won't fail CI but leaves it drifted. The plugin manifest version is what Claude Code's plugin cache keys on — if it drifts from the npm version, installs via the marketplace point at a different release than users think.
 2. `.github/workflows/ci.yml` builds, then the `tag` job creates and pushes `vX.Y.Z` (skipped if the tag already exists).
-3. `.github/workflows/release.yml` fires on tag push and runs `npm publish --provenance` plus `gh release create --generate-notes`.
+3. `.github/workflows/release.yml` fires on tag push and runs `npm publish --provenance` plus `gh release create --generate-notes`. Publish auth is via npm **trusted publishing** — the `id-token: write` permission lets the npm CLI exchange the GitHub Actions OIDC token for a short-lived registry token, so no `NPM_TOKEN` secret is needed. Setting `NODE_AUTH_TOKEN` to an empty or malformed value will break publish, so leave the env off entirely.
 
 The `tag` job checks out and pushes using `secrets.RELEASE_PAT` (a fine-grained PAT with **Contents: Read and write** on this repo, stored as a **repository** secret — environment secrets won't be visible to the job). This is required — tags pushed with the default `GITHUB_TOKEN` do not trigger downstream workflows, so `release.yml` would never fire. If the tag job fails with `403 denied to ttpears`, the PAT is missing the Contents:write grant or doesn't list this repo under its scoped repositories.
 
