@@ -1,7 +1,7 @@
 {
   "name": "gitlab-mcp",
   "description": "GitLab MCP server with GraphQL discovery and team activity tools",
-  "version": "1.12.3",
+  "version": "1.12.4",
   "author": {
     "name": "Tim Pearson"
   },
@@ -11,8 +11,8 @@
   "keywords": ["mcp", "gitlab", "graphql"],
   "mcpServers": {
     "gitlab": {
-      "command": "npx",
-      "args": ["-y", "@ttpears/gitlab-mcp-server"]
+      "command": "sh",
+      "args": ["-c", "cd \"$HOME\" && exec npx -y @ttpears/gitlab-mcp-server"]
     }
   }
 }
