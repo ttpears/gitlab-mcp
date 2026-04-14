@@ -52,20 +52,26 @@ Go to GitLab → **User Settings** → **Access Tokens** → create a token with
 ### 2. Choose Your Client
 
 - [Claude Code](#claude-code) — stdio transport, single-user
+- [Claude Desktop](#claude-desktop) — stdio transport, single-user
 - [LibreChat (Docker)](#librechat-docker) — streamable HTTP, multi-user with per-user auth
 
 ---
 
 ## Claude Code
 
-Add to your Claude Code settings (`.claude/settings.json` or project `.mcp.json`):
+Install globally first (recommended — avoids cold-start timeouts on launch):
+
+```bash
+npm install -g @ttpears/gitlab-mcp-server
+```
+
+Then add to your Claude Code settings (`.claude/settings.json` or project `.mcp.json`):
 
 ```json
 {
   "mcpServers": {
     "gitlab": {
-      "command": "npx",
-      "args": ["-y", "@ttpears/gitlab-mcp-server"],
+      "command": "gitlab-mcp-server",
       "env": {
         "GITLAB_URL": "https://gitlab.com",
         "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here"
@@ -75,7 +81,45 @@ Add to your Claude Code settings (`.claude/settings.json` or project `.mcp.json`
 }
 ```
 
+Prefer zero-install? Swap `"command": "gitlab-mcp-server"` for `"command": "npx", "args": ["-y", "@ttpears/gitlab-mcp-server"]` — but note that the first launch may time out while npm fetches the package.
+
 Restart Claude Code to load the server.
+
+---
+
+## Claude Desktop
+
+See the [official guide for local MCP servers](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).
+
+Install globally:
+
+```bash
+npm install -g @ttpears/gitlab-mcp-server
+```
+
+Edit `claude_desktop_config.json`:
+
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "gitlab": {
+      "command": "gitlab-mcp-server",
+      "env": {
+        "GITLAB_URL": "https://gitlab.com",
+        "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here"
+      }
+    }
+  }
+}
+```
+
+On Windows, `command` may need to be the full path to the installed shim (e.g. `C:\\Users\\<you>\\AppData\\Roaming\\npm\\gitlab-mcp-server.cmd`) since Claude Desktop doesn't always inherit the shell `PATH`.
+
+Restart Claude Desktop to load the server.
 
 ---
 
