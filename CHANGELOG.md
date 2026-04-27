@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `analytics_group_summary` tool: aggregated activity summary for an entire
+  group (optionally including subgroups) over a time window. Returns
+  per-action totals plus breakdowns by project, by contributor, and by day.
+  Group-scoped sibling of `analytics_user_summary`.
+- README badges for CI status, monthly npm downloads, and GHCR container image.
+
+### Removed
+
+- Smithery.ai integration. The `smithery.yaml` config still referenced
+  `GITLAB_AUTH_MODE=hybrid`, which 1.14.0 removed as a breaking change, so
+  Smithery deployments were already broken. Drops the `@smithery/sdk` dev
+  dependency, the `createMcpServer` default export, the `configSchema` export,
+  the `/.well-known/mcp-config` HTTP endpoint, and the 17 MB committed
+  `.smithery/index.cjs` build artifact.
+
 ## [1.14.1] - 2026-04-27
 
 ### Fixed

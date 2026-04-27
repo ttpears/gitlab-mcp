@@ -1,6 +1,9 @@
 # GitLab MCP Server
 
 [![npm version](https://img.shields.io/npm/v/@ttpears/gitlab-mcp-server)](https://www.npmjs.com/package/@ttpears/gitlab-mcp-server)
+[![npm downloads](https://img.shields.io/npm/dm/@ttpears/gitlab-mcp-server)](https://www.npmjs.com/package/@ttpears/gitlab-mcp-server)
+[![CI](https://github.com/ttpears/gitlab-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ttpears/gitlab-mcp/actions/workflows/ci.yml)
+[![Container](https://img.shields.io/badge/ghcr.io-ttpears%2Fgitlab--mcp-2496ED?logo=docker&logoColor=white)](https://github.com/ttpears/gitlab-mcp/pkgs/container/gitlab-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 <img src="assets/logo.svg" width="80" align="right" alt="gitlab-mcp"/>
