@@ -494,7 +494,6 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
       }
       
       // Determine transport based on environment
-      // Note: For Smithery TypeScript runtime, run in stdio; their wrapper provides HTTP.
       const port = process.env.GITLAB_MCP_PORT ? parseInt(process.env.GITLAB_MCP_PORT) : null;
       const useHttp = process.env.MCP_TRANSPORT === 'http';
       
@@ -580,22 +579,6 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           }
         });
 
-        // Container-runtime compatibility: serve config schema
-        app.get('/.well-known/mcp-config', (req, res) => {
-          res.set('Content-Type', 'application/schema+json; charset=utf-8');
-          const baseSchema = toJsonSchema(configSchema);
-          const configJsonSchema = {
-            $schema: 'https://json-schema.org/draft/2020-12/schema',
-            $id: `${req.protocol}://${req.get('host')}/.well-known/mcp-config`,
-            title: 'MCP Session Configuration',
-            description: 'Schema for the /mcp endpoint configuration',
-            'x-mcp-version': '1.0',
-            'x-query-style': 'dot+bracket',
-            ...baseSchema,
-          } as any;
-          res.json(configJsonSchema);
-        });
-
         // Health check endpoint
         app.get('/health', (req, res) => {
           res.json({
@@ -663,19 +646,6 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
     }
   }
 }
-
-// Smithery TypeScript runtime expects a default export that returns an MCP Server instance.
-// This factory prepares the server with all handlers but does not bind transports.
-export default function createMcpServer(_args: { sessionId: string; config: unknown }): Server {
-  const instance = new GitLabMCPServer();
-  // Create and return a new Server instance; the host (e.g., Smithery) will call connect(transport)
-  // and manage the Streamable HTTP session lifecycle.
-  // @ts-ignore accessing private for integration factory
-  return (instance as any).createServer() as Server;
-}
-
-// Optional: expose a (currently empty) config schema for /.well-known/mcp-config
-export const configSchema = z.object({});
 
 // Run in CLI mode only if this file is the program entry-point.
 // Use realpathSync on both paths so symlink-based invocation (e.g. via npx

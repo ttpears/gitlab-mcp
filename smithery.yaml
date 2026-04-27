@@ -1,6 +1,0 @@
-runtime: "typescript"
-env:
-  GITLAB_URL: "https://gitlab.com"
-  GITLAB_AUTH_MODE: "hybrid"
-  GITLAB_MAX_PAGE_SIZE: "50"
-  GITLAB_TIMEOUT: "30000"
