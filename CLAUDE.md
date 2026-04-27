@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run dev` — Run the server directly from `src/` via `tsx` (stdio transport by default).
 - `npm start` — Run the compiled server from `dist/index.js`.
 - `npm test` — Jest. Run a single test with `npx jest <path>` or `npx jest -t "<name>"`.
-- Local smoke test over HTTP: `MCP_TRANSPORT=http GITLAB_MCP_PORT=8008 GITLAB_SHARED_ACCESS_TOKEN=glpat-... npm run dev`, then point an MCP client at `http://localhost:8008/` (health check: `curl http://localhost:8008/health`).
+- Local smoke test over HTTP: `MCP_TRANSPORT=http GITLAB_MCP_PORT=8008 GITLAB_TOKEN=glpat-... npm run dev`, then point an MCP client at `http://localhost:8008/` (health check: `curl http://localhost:8008/health`).
 - Interactive tool testing: `npx @modelcontextprotocol/inspector npx @ttpears/gitlab-mcp-server`.
 - Debug logging: set `NODE_ENV=development` — startup prints the resolved config to stderr; production suppresses it.
 
@@ -16,16 +16,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Four source files, ~4.7k lines total — keep the layering in mind before adding code:
 
-- `src/config.ts` — `loadConfig()` reads env (`GITLAB_URL`, `GITLAB_SHARED_ACCESS_TOKEN`, `GITLAB_AUTH_MODE`, `GITLAB_MAX_PAGE_SIZE`, `GITLAB_TIMEOUT`) into a zod-validated `Config`. `validateUserConfig()` parses per-request `userCredentials`. Auth modes: `shared` (one token for everything), `per-user` (every call must supply a user token), `hybrid` (default — shared token for reads, user token required for writes).
-- `src/gitlab-client.ts` — `GitLabGraphQLClient` wraps `graphql-request` and is the only place that talks to GitLab. Every method accepts optional `userCredentials`; it picks the right token per the auth mode. Also hosts `fetchAllPages()` — the cursor-loop helper every `fetchAll` tool uses — and schema-introspection helpers.
+- `src/config.ts` — `loadConfig()` reads env (`GITLAB_URL`, `GITLAB_TOKEN`, `GITLAB_READ_TOKEN`, `GITLAB_MAX_PAGE_SIZE`, `GITLAB_TIMEOUT`) into a zod-validated `Config`. `validateUserConfig()` parses per-request `userCredentials`. `GITLAB_TOKEN` and `GITLAB_READ_TOKEN` are mutually exclusive; setting both is a startup error. Old `GITLAB_AUTH_MODE` and `GITLAB_SHARED_ACCESS_TOKEN` env vars trigger a deprecation warning and are ignored.
+- `src/gitlab-client.ts` — `GitLabGraphQLClient` wraps `graphql-request` and is the only place that talks to GitLab. Every method accepts optional `userCredentials`; `getClient()` picks a token per the four-step rule (see Project Conventions below). Also hosts `fetchAllPages()` — the cursor-loop helper every `fetchAll` tool uses — and schema-introspection helpers.
 - `src/tools.ts` — Declarative tool registry: each entry is `{ name, description, inputSchema: zod, handler(args, client) }`. Handlers are thin — they validate input, call the client, and shape the response. This is where pagination defaults and sort enums live for each tool.
 - `src/index.ts` — `GitLabMCPServer` owns both transports. Stdio mode uses a single `Server` instance. HTTP mode (`MCP_TRANSPORT=http`) runs Express and maintains a `httpSessions` map keyed by session id, each with its own `Server` + `StreamableHTTPServerTransport` + per-session `userConfig`. The HTTP entry point accepts both `/` and `/mcp` (the latter exists for container setups). LibreChat sends credentials via `Authorization: Bearer <PAT>` and optional `X-GitLab-Url` headers — these are lifted into the session's `userConfig`. Idle sessions are reaped by `sessionCleanupInterval`.
 
-Key flow to understand for any tool change: `index.ts` routes the MCP call → looks up the tool in `tools.ts` → handler calls `gitlab-client.ts` → client picks shared vs user token based on auth mode and the presence of `userCredentials` in the args.
+Key flow to understand for any tool change: `index.ts` routes the MCP call → looks up the tool in `tools.ts` → handler calls `gitlab-client.ts` → `getClient()` resolves a token in four steps: per-call user creds win, else `GITLAB_TOKEN` (for reads or writes), else `GITLAB_READ_TOKEN` (reads only), else error. The `requiresWrite` flag on each client method gates step 2 vs step 3.
 
 ## Project conventions (from `.cursorrules`)
 
-- **Auth**: hybrid is default. Read tools may fall back to the shared token; write tools must throw if no user token is provided. Never silently write with the shared token.
+- **Auth**: two role-named env vars determine fallback behavior. `GITLAB_TOKEN` (full access) is used for reads and writes when no per-call user creds are present. `GITLAB_READ_TOKEN` (read-only) is used only for reads; writes against it are always rejected. Setting both is a startup error. With neither set, every operation requires per-call user creds. Never silently write with a `GITLAB_READ_TOKEN`.
 - **Pagination**: every list/search tool takes `first`, `after`, and `fetchAll`. Defaults: `first=20`, cap at `config.maxPageSize`. `fetchAll=true` routes through `fetchAllPages()` and returns `{ nodes, totalFetched, hasMore, pageInfo }`. `search_gitlab` paginates projects and issues independently.
 - **Sort**: issues, MRs, and projects default to `UPDATED_DESC` for recency bias.
 - **State filters**: `all` → undefined; other values → uppercased GraphQL enum.
@@ -34,6 +34,8 @@ Key flow to understand for any tool change: `index.ts` routes the MCP call → l
 - **Update tools** (`update_issue`, `update_merge_request`) are schema-aware and fall back to granular mutations when the combined mutation isn't supported.
 
 When adding a new tool, mirror an existing one of the same shape (list/search/update/discovery) — the patterns are consistent and the tool registry is the source of truth.
+
+- **CHANGELOG.md**: contributors update the `[Unreleased]` block in `CHANGELOG.md` for any PR that affects user-facing behavior, env vars, tools, or breaking changes. Pure refactors, doc-only PRs, and CI changes don't need an entry. At release time the `[Unreleased]` block is renamed to the new version with a date and a fresh `[Unreleased]` is started — manual one-line edit, not automated.
 
 ## Release flow
 
