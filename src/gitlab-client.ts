@@ -1966,6 +1966,88 @@ export class GitLabGraphQLClient {
     return result.createNote;
   }
 
+  /**
+   * Destroy an issue. Maps to GitLab GraphQL `destroyIssue` mutation.
+   * Requires a user token (or GITLAB_TOKEN if configured as the env fallback).
+   */
+  async destroyIssue(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig
+  ): Promise<{ errors: string[] }> {
+    const mutation = `
+      mutation DestroyIssue($input: DestroyIssueInput!) {
+        destroyIssue(input: $input) {
+          errors
+        }
+      }
+    `;
+    const result = await this.query<{ destroyIssue: { errors: string[] } }>(
+      mutation,
+      { input: { projectPath, iid } },
+      userConfig,
+      true
+    );
+    if (result.destroyIssue.errors.length > 0) {
+      throw new Error(`destroyIssue failed: ${result.destroyIssue.errors.join('; ')}`);
+    }
+    return result.destroyIssue;
+  }
+
+  /**
+   * Destroy a note (issue or MR comment). Maps to GraphQL `destroyNote`.
+   */
+  async destroyNote(
+    noteId: string,
+    userConfig?: UserConfig
+  ): Promise<{ errors: string[] }> {
+    // GraphQL note IDs are gids — accept either bare numeric or full gid form.
+    const gid = noteId.startsWith('gid://') ? noteId : `gid://gitlab/Note/${noteId}`;
+    const mutation = `
+      mutation DestroyNote($input: DestroyNoteInput!) {
+        destroyNote(input: $input) {
+          errors
+        }
+      }
+    `;
+    const result = await this.query<{ destroyNote: { errors: string[] } }>(
+      mutation,
+      { input: { id: gid } },
+      userConfig,
+      true
+    );
+    if (result.destroyNote.errors.length > 0) {
+      throw new Error(`destroyNote failed: ${result.destroyNote.errors.join('; ')}`);
+    }
+    return result.destroyNote;
+  }
+
+  /**
+   * Update a note's body. Maps to GraphQL `updateNote`.
+   */
+  async updateNote(
+    noteId: string,
+    body: string,
+    userConfig?: UserConfig
+  ): Promise<{ note: { id: string; body: string; updatedAt: string }; errors: string[] }> {
+    const gid = noteId.startsWith('gid://') ? noteId : `gid://gitlab/Note/${noteId}`;
+    const mutation = `
+      mutation UpdateNote($input: UpdateNoteInput!) {
+        updateNote(input: $input) {
+          note { id body updatedAt }
+          errors
+        }
+      }
+    `;
+    const result = await this.query<{
+      updateNote: { note: { id: string; body: string; updatedAt: string }; errors: string[] };
+    }>(mutation, { input: { id: gid, body } }, userConfig, true);
+    if (result.updateNote.errors.length > 0) {
+      throw new Error(`updateNote failed: ${result.updateNote.errors.join('; ')}`);
+    }
+    return result.updateNote;
+  }
+
   // ── Milestones ─────────────────────────────────────────────────────
 
   async listMilestones(
