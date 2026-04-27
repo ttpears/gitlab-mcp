@@ -2705,6 +2705,29 @@ export class GitLabGraphQLClient {
     });
   }
 
+  async listGroupProjectsForAnalytics(
+    fullPath: string,
+    opts: { includeSubgroups?: boolean; maxItems?: number } = {},
+    userConfig?: UserConfig,
+  ): Promise<PaginatedResult<{ id: string; fullPath: string }>> {
+    const query = gql`
+      query groupProjectsForAnalytics($fullPath: ID!, $includeSubgroups: Boolean!, $first: Int!, $after: String) {
+        group(fullPath: $fullPath) {
+          projects(includeSubgroups: $includeSubgroups, first: $first, after: $after) {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes { id fullPath }
+          }
+        }
+      }
+    `;
+    return this.fetchAllPages(
+      query,
+      { fullPath, includeSubgroups: opts.includeSubgroups ?? true },
+      'group.projects',
+      { maxItems: opts.maxItems ?? 500, pageSize: this.config.maxPageSize, userConfig },
+    );
+  }
+
   async listOpenMergeRequestsForReviewQueue(
     scope: { type: 'group' | 'project'; fullPath: string },
     opts: { maxItems?: number } = {},

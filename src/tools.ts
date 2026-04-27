@@ -4,6 +4,7 @@ import { validateUserConfig, type UserConfig } from './config.js';
 import {
   resolveWindow,
   fetchUserEventsInWindow,
+  fetchGroupEventsInWindow,
   bucketBy,
   countByAction,
   buildEnvelope,
@@ -1815,6 +1816,126 @@ const analyticsUserSummaryTool: Tool = {
   },
 };
 
+const analyticsGroupSummaryTool: Tool = {
+  name: 'analytics_group_summary',
+  title: 'Group Activity Summary',
+  description:
+    'Aggregated activity summary for an entire group (optionally including subgroups) over a time window — totals by action type (pushes, MRs opened/merged, comments, approvals), with breakdowns by project, by contributor, and by day. Use this to answer "what did this team do" without fanning out across list_project_events yourself.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    group: z
+      .string()
+      .min(1)
+      .describe('Group full path (e.g. "my-group" or "my-group/sub-group")'),
+    since: z
+      .string()
+      .describe('ISO date/datetime, inclusive lower bound (e.g. "2026-04-01" or "2026-04-01T00:00:00Z")'),
+    until: z
+      .string()
+      .optional()
+      .describe('ISO date/datetime, inclusive upper bound. Defaults to now.'),
+    includeSubgroups: z
+      .boolean()
+      .default(true)
+      .describe('Recurse into subgroup projects. Defaults to true.'),
+    topContributors: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(10)
+      .describe('Cap on the byUser[] list (sorted by event count desc). Default 10.'),
+    maxEvents: z
+      .number()
+      .int()
+      .min(1)
+      .max(10000)
+      .optional()
+      .describe('Global cap on events fetched across all projects. Defaults to 2000; envelope flags truncated:true if reached.'),
+    maxProjects: z
+      .number()
+      .int()
+      .min(1)
+      .max(2000)
+      .optional()
+      .describe('Cap on projects scanned. Defaults to 500.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const group = input.group.trim();
+    const window = resolveWindow(input.since, input.until);
+
+    const { events, truncated, projects, projectsTruncated } = await fetchGroupEventsInWindow(
+      client,
+      group,
+      {
+        window,
+        maxEvents: input.maxEvents,
+        includeSubgroups: input.includeSubgroups,
+        maxProjects: input.maxProjects,
+      },
+      credentials,
+    );
+
+    const projectPathById = new Map<number, string>();
+    for (const p of projects) projectPathById.set(p.id, p.fullPath);
+
+    const byProject: Array<{
+      projectId: number;
+      projectPath: string | null;
+      totals: ReturnType<typeof countByAction>;
+    }> = [];
+    for (const [projectId, bucket] of bucketBy(events, (e: NormalizedEvent) => e.projectId)) {
+      byProject.push({
+        projectId,
+        projectPath: projectPathById.get(projectId) ?? null,
+        totals: countByAction(bucket),
+      });
+    }
+    byProject.sort((a, b) => b.totals.events - a.totals.events);
+
+    const byUserAll: Array<{ username: string; totals: ReturnType<typeof countByAction> }> = [];
+    for (const [username, bucket] of bucketBy(events, (e: NormalizedEvent) => e.authorUsername)) {
+      byUserAll.push({ username, totals: countByAction(bucket) });
+    }
+    byUserAll.sort((a, b) => b.totals.events - a.totals.events);
+    const byUser = byUserAll.slice(0, input.topContributors);
+
+    const byDay: Array<{ date: string; totals: ReturnType<typeof countByAction> }> = [];
+    for (const [date, bucket] of bucketBy(events, (e: NormalizedEvent) =>
+      e.createdAt.toISOString().slice(0, 10),
+    )) {
+      byDay.push({ date, totals: countByAction(bucket) });
+    }
+    byDay.sort((a, b) => a.date.localeCompare(b.date));
+
+    const envelope = buildEnvelope(
+      { type: 'group', identifier: group },
+      window,
+      events,
+      {
+        byProject,
+        byUser,
+        byDay,
+        projectsScanned: projects.length,
+        contributorsTotal: byUserAll.length,
+      },
+      truncated,
+    );
+
+    if (projectsTruncated) {
+      envelope.warnings = [
+        ...envelope.warnings,
+        `Group has more projects than maxProjects cap (${input.maxProjects ?? 500}); some projects were not scanned.`,
+      ];
+    }
+
+    return envelope;
+  },
+};
+
 const REVIEW_BUCKETS = ['<1d', '1-3d', '3-7d', '7-14d', '>14d'] as const;
 type ReviewBucket = typeof REVIEW_BUCKETS[number];
 
@@ -1992,6 +2113,7 @@ export const readOnlyTools: Tool[] = [
   listProjectEventsTool,
   listMyEventsTool,
   analyticsUserSummaryTool,
+  analyticsGroupSummaryTool,
   analyticsReviewBottlenecksTool,
 ];
 
