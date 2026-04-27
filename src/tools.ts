@@ -54,12 +54,12 @@ const withUserAuth = (baseSchema: z.ZodObject<any>, required = false) => {
     });
   } else {
     return baseSchema.extend({
-      userCredentials: UserCredentialsSchema.describe('Your GitLab credentials (optional - uses shared token if not provided)'),
+      userCredentials: UserCredentialsSchema.describe('Your GitLab credentials (optional — falls back to the configured env token if not provided)'),
     });
   }
 };
 
-// Read-only tools (can use shared token)
+// Read-only tools (can use the configured env token)
 const getCurrentUserTool: Tool = {
   name: 'get_current_user',
   title: 'Current User',
