@@ -4,6 +4,7 @@ import { validateUserConfig, type UserConfig } from './config.js';
 import {
   resolveWindow,
   fetchUserEventsInWindow,
+  fetchGroupEventsInWindow,
   bucketBy,
   countByAction,
   buildEnvelope,
@@ -1015,6 +1016,186 @@ const getNotesTool: Tool = {
   },
 };
 
+const getIssueContextTool: Tool = {
+  name: 'get_issue_context',
+  title: 'Get Issue Context',
+  description:
+    'Bundle issue body, all notes (paginated up to maxNotes), related merge requests (mentioning), closing merge requests, linked issues (relates_to/blocks/is_blocked_by) into a single call. Use this instead of fanning out across get_issues + get_notes + search_merge_requests when investigating an issue.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().min(1).describe('Full project path (e.g. "my-group/my-project")'),
+    iid: z.string().min(1).describe('Issue IID (the number shown in the GitLab UI)'),
+    maxNotes: z.number().int().min(1).max(500).default(100).describe('Cap on notes fetched. Default 100.'),
+    includeSystemNotes: z.boolean().default(false).describe('Include system-generated notes (label changes, assignment events). Default false.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const projectPath = input.projectPath.trim();
+    const iid = input.iid.trim();
+
+    const [detail, notesResult, related, closedBy, links] = await Promise.all([
+      client.getIssueDetail(projectPath, iid, credentials),
+      client.getNotes(projectPath, 'issue', iid, input.maxNotes, undefined, true, credentials),
+      client.getIssueRelatedMergeRequests(projectPath, iid, credentials).catch(() => []),
+      client.getIssueClosedBy(projectPath, iid, credentials).catch(() => []),
+      client.getIssueLinks(projectPath, iid, credentials).catch(() => []),
+    ]);
+
+    const issue = detail?.project?.issue;
+    if (!issue) {
+      throw new Error(`Issue ${projectPath}#${iid} not found.`);
+    }
+
+    const allNotes: any[] = Array.isArray(notesResult?.nodes) ? notesResult.nodes : [];
+    const notes = input.includeSystemNotes ? allNotes : allNotes.filter((n) => !n.system);
+
+    const summarizeMR = (mr: any) => ({
+      iid: mr.iid,
+      title: mr.title,
+      state: mr.state,
+      webUrl: mr.web_url ?? mr.webUrl,
+      author: mr.author?.username ?? null,
+      sourceBranch: mr.source_branch ?? mr.sourceBranch,
+      targetBranch: mr.target_branch ?? mr.targetBranch,
+    });
+
+    const summarizeLink = (l: any) => ({
+      iid: String(l.iid),
+      title: l.title,
+      state: l.state,
+      linkType: l.link_type ?? null,
+      webUrl: l.web_url ?? null,
+      projectId: l.project_id ?? null,
+    });
+
+    return {
+      project: { fullPath: projectPath },
+      issue,
+      notes: {
+        count: notes.length,
+        truncated: !!notesResult?.hasMore,
+        nodes: notes,
+      },
+      relatedMergeRequests: related.map(summarizeMR),
+      closingMergeRequests: closedBy.map(summarizeMR),
+      linkedIssues: links.map(summarizeLink),
+    };
+  },
+};
+
+const getMergeRequestContextTool: Tool = {
+  name: 'get_merge_request_context',
+  title: 'Get Merge Request Context',
+  description:
+    'Bundle MR body, all notes (paginated up to maxNotes, filtered to non-system by default), commits, pipeline summary, reviewers with approval state, and issues this MR will close into a single call. Use this instead of fanning out across get_merge_requests + get_notes + get_merge_request_commits + get_merge_request_pipelines when investigating an MR.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().min(1).describe('Full project path (e.g. "my-group/my-project")'),
+    iid: z.string().min(1).describe('Merge request IID'),
+    maxNotes: z.number().int().min(1).max(500).default(100).describe('Cap on notes fetched. Default 100.'),
+    maxCommits: z.number().int().min(1).max(500).default(50).describe('Cap on commits fetched. Default 50.'),
+    includeSystemNotes: z.boolean().default(false).describe('Include system-generated notes. Default false.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const projectPath = input.projectPath.trim();
+    const iid = input.iid.trim();
+
+    const [detail, notesResult, commitsResult, pipelinesResult, reviewers, closesIssues] = await Promise.all([
+      client.getMergeRequestDetail(projectPath, iid, credentials),
+      client.getNotes(projectPath, 'merge_request', iid, input.maxNotes, undefined, true, credentials),
+      client.getMergeRequestCommits(projectPath, iid, input.maxCommits, undefined, true, credentials),
+      client.getMergeRequestPipelines(projectPath, iid, 5, undefined, false, credentials).catch(() => null),
+      client.getMergeRequestReviewers(projectPath, iid, credentials).catch(() => null),
+      client.getMergeRequestClosesIssues(projectPath, iid, credentials).catch(() => []),
+    ]);
+
+    const mr = detail?.project?.mergeRequest;
+    if (!mr) {
+      throw new Error(`Merge request ${projectPath}!${iid} not found.`);
+    }
+
+    const allNotes: any[] = Array.isArray(notesResult?.nodes) ? notesResult.nodes : [];
+    const notes = input.includeSystemNotes ? allNotes : allNotes.filter((n) => !n.system);
+
+    return {
+      project: { fullPath: projectPath },
+      mergeRequest: mr,
+      notes: {
+        count: notes.length,
+        truncated: !!notesResult?.hasMore,
+        nodes: notes,
+      },
+      commits: {
+        count: Array.isArray(commitsResult?.nodes) ? commitsResult.nodes.length : 0,
+        truncated: !!commitsResult?.hasMore,
+        nodes: commitsResult?.nodes ?? [],
+      },
+      pipelines: pipelinesResult ?? null,
+      reviewers: reviewers ?? null,
+      closesIssues: closesIssues.map((i: any) => ({
+        iid: String(i.iid),
+        title: i.title,
+        state: i.state,
+        webUrl: i.web_url ?? null,
+        projectId: i.project_id ?? null,
+      })),
+    };
+  },
+};
+
+const searchNotesTool: Tool = {
+  name: 'search_notes',
+  title: 'Search Notes (Comments)',
+  description:
+    'Full-text search across issue and merge request comments. Scope can be global, a project, or a group. NOTE: on self-hosted GitLab, the "notes" search scope requires Advanced Search (Elasticsearch) to be enabled — without it, this endpoint returns an error. search_gitlab does NOT search note bodies; this tool does.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    search: z.string().min(1).describe('Search term. Trimmed; empty rejected.'),
+    scope: z.enum(['global', 'project', 'group']).default('global').describe('Search scope. Default global.'),
+    projectPath: z.string().optional().describe('Required when scope=project. Full project path.'),
+    groupPath: z.string().optional().describe('Required when scope=group. Full group path.'),
+    perPage: z.number().int().min(1).max(100).default(20).describe('Results per page. Default 20.'),
+    page: z.number().int().min(1).default(1).describe('Page number. Default 1.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const search = input.search.trim();
+    if (!search) throw new Error('search_notes requires a non-empty search term.');
+    if (input.scope === 'project' && !input.projectPath) {
+      throw new Error('search_notes scope=project requires projectPath.');
+    }
+    if (input.scope === 'group' && !input.groupPath) {
+      throw new Error('search_notes scope=group requires groupPath.');
+    }
+    const results = await client.searchNotes(
+      {
+        search,
+        scope: input.scope,
+        projectPath: input.projectPath?.trim(),
+        groupPath: input.groupPath?.trim(),
+        perPage: input.perPage,
+        page: input.page,
+      },
+      credentials,
+    );
+    return {
+      scope: input.scope,
+      search,
+      page: input.page,
+      perPage: input.perPage,
+      count: Array.isArray(results) ? results.length : 0,
+      nodes: results,
+    };
+  },
+};
+
 const createNoteTool: Tool = {
   name: 'create_note',
   title: 'Create Note',
@@ -1815,6 +1996,126 @@ const analyticsUserSummaryTool: Tool = {
   },
 };
 
+const analyticsGroupSummaryTool: Tool = {
+  name: 'analytics_group_summary',
+  title: 'Group Activity Summary',
+  description:
+    'Aggregated activity summary for an entire group (optionally including subgroups) over a time window — totals by action type (pushes, MRs opened/merged, comments, approvals), with breakdowns by project, by contributor, and by day. Use this to answer "what did this team do" without fanning out across list_project_events yourself.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    group: z
+      .string()
+      .min(1)
+      .describe('Group full path (e.g. "my-group" or "my-group/sub-group")'),
+    since: z
+      .string()
+      .describe('ISO date/datetime, inclusive lower bound (e.g. "2026-04-01" or "2026-04-01T00:00:00Z")'),
+    until: z
+      .string()
+      .optional()
+      .describe('ISO date/datetime, inclusive upper bound. Defaults to now.'),
+    includeSubgroups: z
+      .boolean()
+      .default(true)
+      .describe('Recurse into subgroup projects. Defaults to true.'),
+    topContributors: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(10)
+      .describe('Cap on the byUser[] list (sorted by event count desc). Default 10.'),
+    maxEvents: z
+      .number()
+      .int()
+      .min(1)
+      .max(10000)
+      .optional()
+      .describe('Global cap on events fetched across all projects. Defaults to 2000; envelope flags truncated:true if reached.'),
+    maxProjects: z
+      .number()
+      .int()
+      .min(1)
+      .max(2000)
+      .optional()
+      .describe('Cap on projects scanned. Defaults to 500.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    const group = input.group.trim();
+    const window = resolveWindow(input.since, input.until);
+
+    const { events, truncated, projects, projectsTruncated } = await fetchGroupEventsInWindow(
+      client,
+      group,
+      {
+        window,
+        maxEvents: input.maxEvents,
+        includeSubgroups: input.includeSubgroups,
+        maxProjects: input.maxProjects,
+      },
+      credentials,
+    );
+
+    const projectPathById = new Map<number, string>();
+    for (const p of projects) projectPathById.set(p.id, p.fullPath);
+
+    const byProject: Array<{
+      projectId: number;
+      projectPath: string | null;
+      totals: ReturnType<typeof countByAction>;
+    }> = [];
+    for (const [projectId, bucket] of bucketBy(events, (e: NormalizedEvent) => e.projectId)) {
+      byProject.push({
+        projectId,
+        projectPath: projectPathById.get(projectId) ?? null,
+        totals: countByAction(bucket),
+      });
+    }
+    byProject.sort((a, b) => b.totals.events - a.totals.events);
+
+    const byUserAll: Array<{ username: string; totals: ReturnType<typeof countByAction> }> = [];
+    for (const [username, bucket] of bucketBy(events, (e: NormalizedEvent) => e.authorUsername)) {
+      byUserAll.push({ username, totals: countByAction(bucket) });
+    }
+    byUserAll.sort((a, b) => b.totals.events - a.totals.events);
+    const byUser = byUserAll.slice(0, input.topContributors);
+
+    const byDay: Array<{ date: string; totals: ReturnType<typeof countByAction> }> = [];
+    for (const [date, bucket] of bucketBy(events, (e: NormalizedEvent) =>
+      e.createdAt.toISOString().slice(0, 10),
+    )) {
+      byDay.push({ date, totals: countByAction(bucket) });
+    }
+    byDay.sort((a, b) => a.date.localeCompare(b.date));
+
+    const envelope = buildEnvelope(
+      { type: 'group', identifier: group },
+      window,
+      events,
+      {
+        byProject,
+        byUser,
+        byDay,
+        projectsScanned: projects.length,
+        contributorsTotal: byUserAll.length,
+      },
+      truncated,
+    );
+
+    if (projectsTruncated) {
+      envelope.warnings = [
+        ...envelope.warnings,
+        `Group has more projects than maxProjects cap (${input.maxProjects ?? 500}); some projects were not scanned.`,
+      ];
+    }
+
+    return envelope;
+  },
+};
+
 const REVIEW_BUCKETS = ['<1d', '1-3d', '3-7d', '7-14d', '>14d'] as const;
 type ReviewBucket = typeof REVIEW_BUCKETS[number];
 
@@ -1979,6 +2280,8 @@ export const readOnlyTools: Tool[] = [
   getMergeRequestDiffsTool,
   getMergeRequestCommitsTool,
   getNotesTool,
+  getIssueContextTool,
+  getMergeRequestContextTool,
   listMilestonesTool,
   listIterationsTool,
   getTimeTrackingTool,
@@ -1992,6 +2295,7 @@ export const readOnlyTools: Tool[] = [
   listProjectEventsTool,
   listMyEventsTool,
   analyticsUserSummaryTool,
+  analyticsGroupSummaryTool,
   analyticsReviewBottlenecksTool,
 ];
 
@@ -2022,6 +2326,7 @@ export const searchTools: Tool[] = [
   searchUsersTool,
   searchGroupsTool,
   searchLabelsTool,
+  searchNotesTool,
   browseRepositoryTool,
   getFileContentTool,
   listGroupMembersTool,

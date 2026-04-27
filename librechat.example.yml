@@ -156,23 +156,3 @@ mcpServers:
 #         type: url
 #         required: false
 
----
-
-# Alternative: Smithery.ai installation (stdio transport)
-# Use this for Smithery.ai deployments which use stdio internally
-#
-# mcpServers:
-#   gitlab:
-#     command: npx
-#     args: ["gitlab-mcp-server"]
-#     type: stdio
-#     env:
-#       GITLAB_URL: "${GITLAB_URL:-https://gitlab.com}"
-#       GITLAB_AUTH_MODE: "${GITLAB_AUTH_MODE:-hybrid}"
-#       GITLAB_SHARED_ACCESS_TOKEN: "${GITLAB_SHARED_ACCESS_TOKEN:-}"
-#     customUserVars:
-#       GITLAB_ACCESS_TOKEN:
-#         title: "GitLab Personal Access Token"
-#         description: "Your GitLab PAT with 'api' or 'read_api' scope"
-#         type: password
-#         required: false

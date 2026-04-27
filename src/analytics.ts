@@ -33,7 +33,7 @@ export type CanonicalAction =
   | 'other';
 
 export interface AnalyticsScope {
-  type: 'user' | 'project' | 'me';
+  type: 'user' | 'project' | 'me' | 'group';
   identifier: string;
 }
 
@@ -238,6 +238,71 @@ export async function fetchMyEventsInWindow(
 
 function toDateParam(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+export interface GroupProjectRef {
+  id: number;
+  fullPath: string;
+}
+
+export interface FetchGroupEventsResult extends FetchEventsResult {
+  projects: GroupProjectRef[];
+  projectsTruncated: boolean;
+}
+
+function parseNumericIdFromGid(gid: string | null | undefined): number | null {
+  if (!gid) return null;
+  const tail = gid.split('/').pop();
+  const n = tail ? parseInt(tail, 10) : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+export async function fetchGroupEventsInWindow(
+  client: GitLabGraphQLClient,
+  groupPath: string,
+  opts: FetchEventsOptions & { includeSubgroups?: boolean; maxProjects?: number },
+  userConfig?: UserConfig,
+): Promise<FetchGroupEventsResult> {
+  const maxEvents = opts.maxEvents ?? MAX_EVENTS_DEFAULT;
+  const projectsPage = await client.listGroupProjectsForAnalytics(
+    groupPath,
+    { includeSubgroups: opts.includeSubgroups ?? true, maxItems: opts.maxProjects ?? 500 },
+    userConfig,
+  );
+  const projects: GroupProjectRef[] = (projectsPage.nodes ?? [])
+    .map((p: { id: string; fullPath: string }) => {
+      const id = parseNumericIdFromGid(p.id);
+      return id != null ? { id, fullPath: p.fullPath } : null;
+    })
+    .filter((p): p is GroupProjectRef => p !== null);
+
+  const all: NormalizedEvent[] = [];
+  let truncated = false;
+  for (const project of projects) {
+    if (all.length >= maxEvents) {
+      truncated = true;
+      break;
+    }
+    const remaining = maxEvents - all.length;
+    const result = await fetchProjectEventsInWindow(
+      client,
+      project.fullPath,
+      { window: opts.window, maxEvents: remaining, action: opts.action, targetType: opts.targetType },
+      userConfig,
+    );
+    all.push(...result.events);
+    if (result.truncated) {
+      truncated = true;
+      break;
+    }
+  }
+
+  return {
+    events: all,
+    truncated,
+    projects,
+    projectsTruncated: !!projectsPage.hasMore,
+  };
 }
 
 function collectWarnings(events: NormalizedEvent[]): string[] {
