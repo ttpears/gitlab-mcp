@@ -1,6 +1,6 @@
 node_modules/
 dist/
-docs/superpowers/specs/
+docs/superpowers/
 .env
 .env.local
 .env.*.local
