@@ -110,9 +110,12 @@ class GitLabMCPServer {
         // Extract user credentials: prioritize args, fallback to session-specific config
         let userConfig = validatedInput.userCredentials;
 
-        // If no credentials in args, try to get from session context
-        if (!userConfig && extra?._meta?.sessionId) {
-          const sessionData = this.httpSessions.get(extra._meta.sessionId as string);
+        // If no credentials in args, try to get from session context.
+        // The MCP SDK exposes the transport session id at extra.sessionId
+        // (top-level), not under extra._meta — see RequestHandlerExtra in
+        // @modelcontextprotocol/sdk/shared/protocol.d.ts.
+        if (!userConfig && extra?.sessionId) {
+          const sessionData = this.httpSessions.get(extra.sessionId as string);
           if (sessionData?.userConfig) {
             userConfig = sessionData.userConfig;
           }
