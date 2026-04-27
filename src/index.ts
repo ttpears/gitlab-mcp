@@ -45,10 +45,14 @@ class GitLabMCPServer {
 
     // Log configuration on startup (for debugging)
     if (process.env.NODE_ENV !== 'production') {
+      const tokenLabel = config.token
+        ? 'GITLAB_TOKEN (full access)'
+        : config.readToken
+          ? 'GITLAB_READ_TOKEN (read-only)'
+          : 'none (per-call user credentials required for every operation)';
       console.error('[MCP] Configuration loaded:');
       console.error(`  GitLab URL: ${config.gitlabUrl}`);
-      console.error(`  Auth mode: ${config.authMode}`);
-      console.error(`  Shared token: ${config.sharedAccessToken ? '✓ configured' : '✗ not set'}`);
+      console.error(`  Fallback token: ${tokenLabel}`);
       console.error(`  Max page size: ${config.maxPageSize}`);
       console.error(`  Timeout: ${config.defaultTimeout}ms`);
     }
@@ -60,8 +64,8 @@ class GitLabMCPServer {
   private createServer(): Server {
     const server = new Server(
       {
-        name: 'gitlab-mcp-server',
-        version: '1.9.0',
+        name: 'GitLab',
+        version: '1.14.0',
       },
       {
         capabilities: {
@@ -426,7 +430,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
               userConfig,
               lastActivity: Date.now()
             });
-            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'shared'} credentials (total sessions: ${this.httpSessions.size})`);
+            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'no user'} credentials (total sessions: ${this.httpSessions.size})`);
           },
         });
 
@@ -476,17 +480,17 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
     try {
       const config = loadConfig();
       
-      // Try to introspect schema on startup if we have a shared token
-      if (config.sharedAccessToken) {
+      // Try to introspect schema on startup if we have a fallback token
+      if (config.token || config.readToken) {
         try {
           await this.gitlabClient.introspectSchema();
-          console.error('GitLab GraphQL schema introspected successfully using shared token');
+          console.error('GitLab GraphQL schema introspected successfully using fallback token');
         } catch (error) {
-          console.error('Warning: Failed to introspect schema with shared token:', error);
+          console.error('Warning: Failed to introspect schema with fallback token:', error);
           console.error('Schema will be introspected when user credentials are provided');
         }
       } else {
-        console.error('No shared access token provided. Schema will be introspected when user credentials are provided.');
+        console.error('No fallback token configured. Schema will be introspected when user credentials are provided.');
       }
       
       // Determine transport based on environment
@@ -613,8 +617,14 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           console.error(`Protocol: MCP 2025-11-25`);
           console.error('');
           console.error('Configuration:');
-          console.error(`  Auth mode: ${loadConfig().authMode}`);
-          console.error(`  GitLab URL: ${loadConfig().gitlabUrl}`);
+          const httpConfig = loadConfig();
+          const httpTokenLabel = httpConfig.token
+            ? 'GITLAB_TOKEN (full access)'
+            : httpConfig.readToken
+              ? 'GITLAB_READ_TOKEN (read-only)'
+              : 'none — per-call user credentials required for every operation';
+          console.error(`  GitLab URL: ${httpConfig.gitlabUrl}`);
+          console.error(`  Fallback token: ${httpTokenLabel}`);
           console.error(`  Session cleanup: 10min timeout, checked every 2min`);
           console.error('');
           console.error('For LibreChat: Use streamable-http transport in librechat.yml');
@@ -633,9 +643,8 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
         console.error(`Protocol: MCP 2025-11-25`);
         console.error('');
         console.error('Configuration:');
-        console.error(`  Auth mode: ${config.authMode}`);
         console.error(`  GitLab URL: ${config.gitlabUrl}`);
-        console.error(`  Shared token: ${config.sharedAccessToken ? '✓ configured' : '✗ not set'}`);
+        console.error(`  Token: ${config.token ? 'GITLAB_TOKEN (full access)' : config.readToken ? 'GITLAB_READ_TOKEN (read-only)' : '✗ not set (per-call user credentials required)'}`);
         console.error('');
         console.error('Tip: Set GITLAB_MCP_PORT to enable HTTP mode for LibreChat');
         console.error('='.repeat(60));

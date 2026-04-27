@@ -54,12 +54,12 @@ const withUserAuth = (baseSchema: z.ZodObject<any>, required = false) => {
     });
   } else {
     return baseSchema.extend({
-      userCredentials: UserCredentialsSchema.describe('Your GitLab credentials (optional - uses shared token if not provided)'),
+      userCredentials: UserCredentialsSchema.describe('Your GitLab credentials (optional — falls back to the configured env token if not provided)'),
     });
   }
 };
 
-// Read-only tools (can use shared token)
+// Read-only tools (can use the configured env token)
 const getCurrentUserTool: Tool = {
   name: 'get_current_user',
   title: 'Current User',
@@ -345,6 +345,28 @@ const updateIssueTool: Tool = {
       credentials
     );
     return result;
+  },
+};
+
+const deleteIssueTool: Tool = {
+  name: 'delete_issue',
+  title: 'Delete Issue',
+  description:
+    'Delete a GitLab issue. Requires a user token with permission to delete issues in the project (typically the issue author or a maintainer).',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    projectPath: z.string().min(1).describe('Full path of the project (e.g., "group/project-name")'),
+    iid: z.string().min(1).describe('Issue IID (the number shown in the GitLab UI, e.g. "42")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for deleting issues.');
+    }
+    await client.destroyIssue(input.projectPath.trim(), input.iid.trim(), credentials);
+    return { projectPath: input.projectPath, iid: input.iid, deleted: true };
   },
 };
 
@@ -1020,6 +1042,49 @@ const createNoteTool: Tool = {
     if (result.errors && result.errors.length > 0) {
       throw new Error(`Failed to create note: ${result.errors.join(', ')}`);
     }
+    return result.note;
+  },
+};
+
+const deleteNoteTool: Tool = {
+  name: 'delete_note',
+  title: 'Delete Note',
+  description:
+    'Delete a comment (note) on a GitLab issue or merge request. Requires a user token belonging to the note author or a maintainer.',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    noteId: z.string().min(1).describe('Note ID — either the bare numeric ID or the full GraphQL gid (gid://gitlab/Note/123)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for deleting notes.');
+    }
+    await client.destroyNote(input.noteId.trim(), credentials);
+    return { noteId: input.noteId, deleted: true };
+  },
+};
+
+const updateNoteTool: Tool = {
+  name: 'update_note',
+  title: 'Update Note',
+  description:
+    'Edit the body of an existing comment (note) on a GitLab issue or merge request. Requires a user token belonging to the note author.',
+  requiresAuth: true,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    noteId: z.string().min(1).describe('Note ID — either the bare numeric ID or the full GraphQL gid (gid://gitlab/Note/123)'),
+    body: z.string().min(1).describe('New note body (Markdown supported)'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('User authentication is required for updating notes.');
+    }
+    const result = await client.updateNote(input.noteId.trim(), input.body, credentials);
     return result.note;
   },
 };
@@ -1939,6 +2004,8 @@ export const writeTools: Tool[] = [
   createIssueTool,
   createMergeRequestTool,
   createNoteTool,
+  deleteNoteTool,
+  updateNoteTool,
   managePipelineTool,
   createBroadcastMessageTool,
   updateBroadcastMessageTool,
@@ -1965,6 +2032,7 @@ export const tools: Tool[] = [
   ...userAuthTools,
   ...writeTools,
   updateIssueTool,
+  deleteIssueTool,
   updateMergeRequestTool,
   resolvePathTool,
   getGroupProjectsTool,
