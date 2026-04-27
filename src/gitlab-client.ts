@@ -755,6 +755,83 @@ export class GitLabGraphQLClient {
     return Object.keys(mutationType.getFields());
   }
 
+  async getIssueDetail(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig,
+  ): Promise<any> {
+    const query = gql`
+      query getIssueDetail($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          fullPath
+          issue(iid: $iid) {
+            id
+            iid
+            title
+            description
+            state
+            confidential
+            createdAt
+            updatedAt
+            closedAt
+            webUrl
+            author { username name }
+            assignees { nodes { username name } }
+            labels { nodes { title color } }
+            milestone { title state dueDate webPath }
+            userNotesCount
+            upvotes
+            downvotes
+          }
+        }
+      }
+    `;
+    return this.query(query, { projectPath, iid }, userConfig);
+  }
+
+  async getMergeRequestDetail(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig,
+  ): Promise<any> {
+    const query = gql`
+      query getMergeRequestDetail($projectPath: ID!, $iid: String!) {
+        project(fullPath: $projectPath) {
+          fullPath
+          mergeRequest(iid: $iid) {
+            id
+            iid
+            title
+            description
+            state
+            draft
+            createdAt
+            updatedAt
+            mergedAt
+            closedAt
+            webUrl
+            sourceBranch
+            targetBranch
+            author { username name }
+            assignees { nodes { username name } }
+            mergeUser { username name }
+            labels { nodes { title color } }
+            milestone { title state dueDate webPath }
+            userNotesCount
+            upvotes
+            downvotes
+            diffStatsSummary {
+              additions
+              deletions
+              fileCount
+            }
+          }
+        }
+      }
+    `;
+    return this.query(query, { projectPath, iid }, userConfig);
+  }
+
   // Helpers for updates
   async getIssueId(projectPath: string, iid: string, userConfig?: UserConfig): Promise<string> {
     const query = gql`
@@ -2703,6 +2780,76 @@ export class GitLabGraphQLClient {
       },
       userConfig,
     });
+  }
+
+  async getIssueRelatedMergeRequests(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig,
+  ): Promise<any[]> {
+    const encodedPath = encodeURIComponent(projectPath);
+    return this.restRequest('GET', `/projects/${encodedPath}/issues/${iid}/related_merge_requests`, {
+      userConfig,
+    });
+  }
+
+  async getIssueClosedBy(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig,
+  ): Promise<any[]> {
+    const encodedPath = encodeURIComponent(projectPath);
+    return this.restRequest('GET', `/projects/${encodedPath}/issues/${iid}/closed_by`, {
+      userConfig,
+    });
+  }
+
+  async getIssueLinks(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig,
+  ): Promise<any[]> {
+    const encodedPath = encodeURIComponent(projectPath);
+    return this.restRequest('GET', `/projects/${encodedPath}/issues/${iid}/links`, {
+      userConfig,
+    });
+  }
+
+  async getMergeRequestClosesIssues(
+    projectPath: string,
+    iid: string,
+    userConfig?: UserConfig,
+  ): Promise<any[]> {
+    const encodedPath = encodeURIComponent(projectPath);
+    return this.restRequest('GET', `/projects/${encodedPath}/merge_requests/${iid}/closes_issues`, {
+      userConfig,
+    });
+  }
+
+  async searchNotes(
+    params: {
+      search: string;
+      scope: 'global' | 'project' | 'group';
+      projectPath?: string;
+      groupPath?: string;
+      perPage?: number;
+      page?: number;
+    },
+    userConfig?: UserConfig,
+  ): Promise<any[]> {
+    const perPage = Math.min(params.perPage ?? 20, this.config.maxPageSize);
+    const query = { scope: 'notes', search: params.search, per_page: perPage, page: params.page ?? 1 };
+    let path: string;
+    if (params.scope === 'project') {
+      if (!params.projectPath) throw new Error('searchNotes scope=project requires projectPath');
+      path = `/projects/${encodeURIComponent(params.projectPath)}/search`;
+    } else if (params.scope === 'group') {
+      if (!params.groupPath) throw new Error('searchNotes scope=group requires groupPath');
+      path = `/groups/${encodeURIComponent(params.groupPath)}/search`;
+    } else {
+      path = '/search';
+    }
+    return this.restRequest('GET', path, { query, userConfig });
   }
 
   async listGroupProjectsForAnalytics(
