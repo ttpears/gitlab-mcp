@@ -42,7 +42,7 @@ export function loadConfig(): Config {
   if (token && readToken) {
     throw new Error(
       'Configuration error: GITLAB_TOKEN and GITLAB_READ_TOKEN are mutually exclusive. ' +
-      'Set exactly one (or neither, for strict per-user mode).'
+      'Set exactly one (or neither, to require per-call user credentials for every request).'
     );
   }
 

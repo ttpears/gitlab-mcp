@@ -430,7 +430,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
               userConfig,
               lastActivity: Date.now()
             });
-            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'shared'} credentials (total sessions: ${this.httpSessions.size})`);
+            console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'no user'} credentials (total sessions: ${this.httpSessions.size})`);
           },
         });
 

@@ -2419,7 +2419,7 @@ export class GitLabGraphQLClient {
 
   /**
    * Resolve the GitLab base URL and access token for a REST call, honoring
-   * per-request user credentials and falling back to the shared token.
+   * per-request user credentials and falling back to the configured env token.
    */
   private resolveRestAuth(userConfig?: UserConfig, requiresWrite = false): { baseUrl: string; token: string } {
     if (userConfig) {
