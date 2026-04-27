@@ -7,12 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.0] - 2026-04-27
+
 ### Added
 
 - `analytics_group_summary` tool: aggregated activity summary for an entire
   group (optionally including subgroups) over a time window. Returns
   per-action totals plus breakdowns by project, by contributor, and by day.
   Group-scoped sibling of `analytics_user_summary`.
+- `get_issue_context` tool: bundles issue body, notes, related/closing merge
+  requests, and linked issues into a single call. Replaces 4–5 fan-out tool
+  calls per investigation.
+- `get_merge_request_context` tool: bundles MR body, notes, commits, pipelines,
+  reviewers, and closes-issues into a single call.
+- `search_notes` tool: full-text search across issue and merge request
+  comments via REST `/search?scope=notes`. NOTE: self-hosted GitLab requires
+  Advanced Search (Elasticsearch) enabled for this scope.
 - README badges for CI status, monthly npm downloads, and GHCR container image.
 
 ### Removed
@@ -87,6 +97,7 @@ Old env vars trigger a deprecation warning at startup and are otherwise ignored.
 For releases before 1.14.0 see the
 [GitHub releases page](https://github.com/ttpears/gitlab-mcp/releases).
 
-[Unreleased]: https://github.com/ttpears/gitlab-mcp/compare/v1.14.1...HEAD
+[Unreleased]: https://github.com/ttpears/gitlab-mcp/compare/v1.15.0...HEAD
+[1.15.0]: https://github.com/ttpears/gitlab-mcp/releases/tag/v1.15.0
 [1.14.1]: https://github.com/ttpears/gitlab-mcp/releases/tag/v1.14.1
 [1.14.0]: https://github.com/ttpears/gitlab-mcp/releases/tag/v1.14.0
