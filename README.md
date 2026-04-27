@@ -96,20 +96,46 @@ A read-only service token covers reads (so anyone in the workspace can ask
 questions). Each user supplies their own PAT for writes through LibreChat's
 `customUserVars`.
 
-### docker-compose
+LibreChat's documented extension point is `docker-compose.override.yml` — the
+fragments below assume you're adding `gitlab-mcp` there alongside LibreChat's
+own `api`, `mongodb`, etc.
+
+### `.env`
+
+```env
+GITLAB_URL=https://gitlab.example.com
+GITLAB_READ_TOKEN=glpat-readonly-service-token   # read_api scope only
+```
+
+Use `https://gitlab.com` for SaaS GitLab; use your own host for self-hosted.
+
+### `docker-compose.override.yml`
 
 ```yaml
 services:
   gitlab-mcp:
     image: ghcr.io/ttpears/gitlab-mcp:1.14.0
-    environment:
-      GITLAB_URL: https://gitlab.com
-      GITLAB_READ_TOKEN: ${GITLAB_READ_TOKEN}   # service account, read_api scope
+    env_file:
+      - .env
     networks:
       - librechat
+    restart: unless-stopped
 ```
 
-### librechat.yaml
+`env_file` reads `GITLAB_URL` and `GITLAB_READ_TOKEN` from `.env`. No port
+mapping needed — LibreChat's `api` container reaches `gitlab-mcp` over the
+shared `librechat` network. Add `ports: ["8008:8008"]` only if you need to
+hit it from the host (e.g. for `curl http://localhost:8008/health`).
+
+Then:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.override.yml up -d gitlab-mcp api
+```
+
+`api` is restarted alongside so it re-reads `librechat.yaml`.
+
+### `librechat.yaml`
 
 ```yaml
 mcpServers:
@@ -117,13 +143,22 @@ mcpServers:
     type: streamable-http
     url: http://gitlab-mcp:8008/
     startup: false                # don't connect until the user supplies their PAT
+    initTimeout: 30000
+    timeout: 120000
     headers:
       Authorization: "Bearer {{GITLAB_PAT}}"
+      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"   # optional; lets a user point at a different GitLab
     customUserVars:
       GITLAB_PAT:
         title: "GitLab Personal Access Token"
         description: "Your GitLab PAT with api scope. Used for issues, MRs, and comments you create or edit."
+      GITLAB_URL_OVERRIDE:
+        title: "GitLab URL (optional)"
+        description: "Leave blank to use the workspace default. Override only if your account is on a different GitLab instance."
 ```
+
+`initTimeout` / `timeout` are forgiving defaults for slower internal networks
+and large schemas — drop them if SaaS GitLab feels snappy.
 
 > Server-side env vars use `${VAR}`. Per-user vars use `{{VAR}}`. They are not interchangeable.
 
@@ -131,27 +166,43 @@ mcpServers:
 
 ## LibreChat — strict per-user
 
-Every call must carry a user PAT. No service-account fallback.
+Every call must carry a user PAT. No service-account fallback. Reads as well
+as writes are gated on the user's token.
 
 ### Add MCP Server (UI path — recommended)
 
-1. Host gitlab-mcp somewhere LibreChat can reach. The simplest setup:
+1. Host gitlab-mcp somewhere LibreChat can reach. For a quick standalone host:
 
    ```bash
    docker run -d --restart unless-stopped \
      -p 8008:8008 \
+     -e GITLAB_URL=https://gitlab.example.com \
      --name gitlab-mcp \
      ghcr.io/ttpears/gitlab-mcp:1.14.0
    ```
 
+   Or, when running alongside LibreChat in the same compose project, drop it
+   into `docker-compose.override.yml` (no token env vars):
+
+   ```yaml
+   services:
+     gitlab-mcp:
+       image: ghcr.io/ttpears/gitlab-mcp:1.14.0
+       environment:
+         GITLAB_URL: https://gitlab.example.com
+       networks:
+         - librechat
+       restart: unless-stopped
+   ```
+
 2. In LibreChat → **MCP Servers** → **Add MCP Server**:
-   - **URL:** `https://your-host/`
+   - **URL:** `https://your-host/` (or `http://gitlab-mcp:8008/` if same network)
    - **Authentication:** API Key → check **User provides key** → header format **Bearer**
    - **Save**
 
 3. Each user fills in their PAT through the MCP Tool Select Dialog when configuring an agent.
 
-### librechat.yaml equivalent
+### `librechat.yaml` equivalent
 
 ```yaml
 mcpServers:
@@ -159,6 +210,8 @@ mcpServers:
     type: streamable-http
     url: http://gitlab-mcp:8008/
     startup: false
+    initTimeout: 30000
+    timeout: 120000
     headers:
       Authorization: "Bearer {{GITLAB_PAT}}"
     customUserVars:
@@ -167,7 +220,8 @@ mcpServers:
         description: "Your GitLab PAT with api scope."
 ```
 
-The container needs no env-configured token at all in this mode.
+The container needs no env-configured token at all in this mode — every
+request is rejected unless `Authorization: Bearer …` is present.
 
 ---
 
