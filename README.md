@@ -3,187 +3,225 @@
 [![npm version](https://img.shields.io/npm/v/@ttpears/gitlab-mcp-server)](https://www.npmjs.com/package/@ttpears/gitlab-mcp-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A community MCP server for GitLab — works with **any GitLab tier** (Free, Premium, Ultimate), no GitLab Duo required.
+<img src="assets/logo.svg" width="80" align="right" alt="gitlab-mcp"/>
+
+A community MCP server for GitLab — works with **any GitLab tier** (Free, Premium, Ultimate), no GitLab Duo required. PAT-based auth. Streamable HTTP and stdio transports.
 
 ```bash
 npx @ttpears/gitlab-mcp-server
 ```
 
-## How This Differs from GitLab's Official MCP Server
+---
 
-GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/) (Beta) that requires **Premium/Ultimate** and **GitLab Duo** with beta features enabled. This community server is an alternative for teams that don't have those requirements or need different capabilities.
+## Choose your deployment
+
+| You're running | Go to |
+|---|---|
+| Claude Code or another IDE/AI tool, just for you | [Solo IDE](#solo-ide) |
+| LibreChat for a team with a service-account read token | [LibreChat — service-account reads](#librechat--service-account-reads) |
+| LibreChat where every operation should use the calling user's token | [LibreChat — strict per-user](#librechat--strict-per-user) |
+
+---
+
+## Solo IDE
+
+### Claude Code (recommended)
+
+```bash
+claude mcp add gitlab \
+  --env GITLAB_URL=https://gitlab.com \
+  --env GITLAB_TOKEN=glpat-your-pat \
+  -- npx -y @ttpears/gitlab-mcp-server
+```
+
+`--scope` controls where the configuration lives:
+
+- `--scope local` (default) — only this user, only this project
+- `--scope user` — shared across all of your projects
+- `--scope project` — written to `.mcp.json` in the project root, intended for team check-in
+
+For team check-in, use a `${VAR}` placeholder so the PAT itself stays out of git:
+
+```json
+{
+  "mcpServers": {
+    "gitlab": {
+      "command": "npx",
+      "args": ["-y", "@ttpears/gitlab-mcp-server"],
+      "env": {
+        "GITLAB_URL": "https://gitlab.com",
+        "GITLAB_TOKEN": "${GITLAB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Each contributor exports `GITLAB_TOKEN` in their shell; Claude Code expands it on launch.
+
+### Cold start
+
+If launching via `npx` adds noticeable latency, install once:
+
+```bash
+npm install -g @ttpears/gitlab-mcp-server
+```
+
+…and replace `npx -y @ttpears/gitlab-mcp-server` with `gitlab-mcp-server` in your config.
+
+### Claude Desktop
+
+Add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "gitlab": {
+      "command": "npx",
+      "args": ["-y", "@ttpears/gitlab-mcp-server"],
+      "env": {
+        "GITLAB_URL": "https://gitlab.com",
+        "GITLAB_TOKEN": "glpat-your-pat"
+      }
+    }
+  }
+}
+```
+
+---
+
+## LibreChat — service-account reads
+
+A read-only service token covers reads (so anyone in the workspace can ask
+questions). Each user supplies their own PAT for writes through LibreChat's
+`customUserVars`.
+
+### docker-compose
+
+```yaml
+services:
+  gitlab-mcp:
+    image: ghcr.io/ttpears/gitlab-mcp:1.14.0
+    environment:
+      GITLAB_URL: https://gitlab.com
+      GITLAB_READ_TOKEN: ${GITLAB_READ_TOKEN}   # service account, read_api scope
+    networks:
+      - librechat
+```
+
+### librechat.yaml
+
+```yaml
+mcpServers:
+  gitlab:
+    type: streamable-http
+    url: http://gitlab-mcp:8008/
+    startup: false                # don't connect until the user supplies their PAT
+    headers:
+      Authorization: "Bearer {{GITLAB_PAT}}"
+    customUserVars:
+      GITLAB_PAT:
+        title: "GitLab Personal Access Token"
+        description: "Your GitLab PAT with api scope. Used for issues, MRs, and comments you create or edit."
+```
+
+> Server-side env vars use `${VAR}`. Per-user vars use `{{VAR}}`. They are not interchangeable.
+
+---
+
+## LibreChat — strict per-user
+
+Every call must carry a user PAT. No service-account fallback.
+
+### Add MCP Server (UI path — recommended)
+
+1. Host gitlab-mcp somewhere LibreChat can reach. The simplest setup:
+
+   ```bash
+   docker run -d --restart unless-stopped \
+     -p 8008:8008 \
+     --name gitlab-mcp \
+     ghcr.io/ttpears/gitlab-mcp:1.14.0
+   ```
+
+2. In LibreChat → **MCP Servers** → **Add MCP Server**:
+   - **URL:** `https://your-host/`
+   - **Authentication:** API Key → check **User provides key** → header format **Bearer**
+   - **Save**
+
+3. Each user fills in their PAT through the MCP Tool Select Dialog when configuring an agent.
+
+### librechat.yaml equivalent
+
+```yaml
+mcpServers:
+  gitlab:
+    type: streamable-http
+    url: http://gitlab-mcp:8008/
+    startup: false
+    headers:
+      Authorization: "Bearer {{GITLAB_PAT}}"
+    customUserVars:
+      GITLAB_PAT:
+        title: "GitLab Personal Access Token"
+        description: "Your GitLab PAT with api scope."
+```
+
+The container needs no env-configured token at all in this mode.
+
+---
+
+## Hosting for a remote LibreChat
+
+The server speaks plain HTTP. For LibreChat-as-a-service or any cross-network
+deployment, terminate TLS at a reverse proxy. Common patterns:
+
+- **Caddy** — auto-TLS via Let's Encrypt:
+
+  ```caddyfile
+  mcp.example.com {
+    reverse_proxy gitlab-mcp:8008
+  }
+  ```
+
+- **Traefik** — Docker labels on the `gitlab-mcp` service.
+- **Cloudflare Tunnel** — no public IP needed; expose `gitlab-mcp:8008` through the tunnel.
+
+The `Authorization` and `Mcp-Session-Id` headers must pass through unchanged. Most defaults handle this fine.
+
+---
+
+## How this differs from GitLab's official MCP server
+
+GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/) (Beta) that requires **Premium/Ultimate** and **GitLab Duo**.
 
 | | This server | GitLab official |
 |---|---|---|
 | **GitLab tier** | Free, Premium, Ultimate | Premium / Ultimate only |
 | **GitLab Duo required** | No | Yes |
 | **Auth** | Personal Access Token | OAuth 2.0 Dynamic Client Registration |
-| **Transport** | stdio + streamable HTTP | stdio (via `mcp-remote`) + HTTP |
-| **Multi-client** | Claude Code, LibreChat, any MCP client | Claude Desktop, Claude Code, Cursor, VS Code |
-| **Multi-user auth modes** | hybrid / shared / per-user | OAuth per-user |
+| **Transport** | stdio + streamable HTTP | stdio + HTTP |
+| **Multi-user** | Per-call PAT or service-account fallback | OAuth per-user |
 | **GraphQL schema discovery** | Yes — introspect & run custom queries | No |
 | **Repository browsing & file reading** | Yes | No |
-| **User / group search** | Yes | No |
-| **Update issues & MRs** | Yes | No (create only) |
+| **Update issues / MRs / notes** | Yes | No (create only) |
+| **Delete issues / notes** | Yes | No |
 | **CI/CD pipeline management** | Yes | Yes |
 | **MR diffs & commits** | Yes | Yes |
-| **Work item notes** | Yes | Yes |
-| **Semantic code search** | No | Yes (requires additional setup) |
-| **Label search** | Yes | Yes |
-| **Milestone tracking** | Yes | No |
-| **Iteration/sprint tracking** | Yes | No |
 | **Time tracking & timelogs** | Yes | No |
 | **MR reviewer & approval status** | Yes | No |
+| **Iteration / milestone tracking** | Yes | No |
 | **Project statistics dashboard** | Yes | No |
 | **Group member listing** | Yes | No |
+| **Semantic code search** | No | Yes (requires additional setup) |
 
-**Choose this server** if you're on GitLab Free/Community Edition, need GraphQL flexibility, want repo browsing, or run LibreChat multi-user deployments.
-
-**Choose the official server** if you have GitLab Premium/Ultimate with Duo, need semantic code search, or prefer OAuth over PATs.
-
----
-
-## Quick Start
-
-### 1. Create a GitLab Token
-
-Go to GitLab → **User Settings** → **Access Tokens** → create a token with `read_api` (read-only) or `api` (full access) scope.
-
-### 2. Choose Your Client
-
-- [Claude Code](#claude-code) — stdio transport, single-user
-- [Claude Desktop](#claude-desktop) — stdio transport, single-user
-- [LibreChat (Docker)](#librechat-docker) — streamable HTTP, multi-user with per-user auth
+**Choose this server** for Free/CE, GraphQL flexibility, or LibreChat
+multi-user. **Choose the official server** for Premium+Duo with semantic
+code search, or if you prefer OAuth.
 
 ---
 
-## Claude Code
-
-Install globally first (recommended — avoids cold-start timeouts on launch):
-
-```bash
-npm install -g @ttpears/gitlab-mcp-server
-```
-
-Then add to your Claude Code settings (`.claude/settings.json` or project `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "gitlab": {
-      "command": "gitlab-mcp-server",
-      "env": {
-        "GITLAB_URL": "https://gitlab.com",
-        "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here"
-      }
-    }
-  }
-}
-```
-
-Prefer zero-install? Swap `"command": "gitlab-mcp-server"` for `"command": "npx", "args": ["-y", "@ttpears/gitlab-mcp-server"]` — but note that the first launch may time out while npm fetches the package.
-
-Restart Claude Code to load the server.
-
----
-
-## Claude Desktop
-
-See the [official guide for local MCP servers](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).
-
-Install globally:
-
-```bash
-npm install -g @ttpears/gitlab-mcp-server
-```
-
-Edit `claude_desktop_config.json`:
-
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "gitlab": {
-      "command": "gitlab-mcp-server",
-      "env": {
-        "GITLAB_URL": "https://gitlab.com",
-        "GITLAB_SHARED_ACCESS_TOKEN": "glpat-your-token-here"
-      }
-    }
-  }
-}
-```
-
-On Windows, `command` may need to be the full path to the installed shim (e.g. `C:\\Users\\<you>\\AppData\\Roaming\\npm\\gitlab-mcp-server.cmd`) since Claude Desktop doesn't always inherit the shell `PATH`.
-
-Restart Claude Desktop to load the server.
-
----
-
-## LibreChat (Docker)
-
-Runs as a sidecar container using [streamable HTTP transport](https://www.librechat.ai/docs/features/mcp) for multi-user deployments with per-user credential isolation.
-
-### 1. Add environment variables to your LibreChat `.env`:
-
-```bash
-GITLAB_URL=https://gitlab.com
-GITLAB_AUTH_MODE=hybrid
-GITLAB_SHARED_ACCESS_TOKEN=glpat-your-shared-token
-GITLAB_MCP_PORT=8008
-MCP_TRANSPORT=http
-```
-
-### 2. Add the service to `docker-compose.override.yml`:
-
-```yaml
-services:
-  gitlab-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile.mcp-gitlab
-    env_file:
-      - .env
-    ports:
-      - "8008:8008"
-    networks:
-      - librechat
-    restart: unless-stopped
-```
-
-Copy the Dockerfile from this repo into your LibreChat directory as `Dockerfile.mcp-gitlab`. It clones and builds from this repository automatically — no source files needed.
-
-### 3. Configure in `librechat.yml`:
-
-```yaml
-mcpServers:
-  gitlab:
-    type: streamable-http
-    url: "http://gitlab-mcp:8008/"
-    headers:
-      Authorization: "Bearer {{GITLAB_PAT}}"
-      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
-    customUserVars:
-      GITLAB_PAT:
-        title: "GitLab Personal Access Token"
-        description: "PAT with api scope"
-      GITLAB_URL_OVERRIDE:
-        title: "GitLab URL (optional)"
-        description: "e.g., https://gitlab.yourdomain.com"
-```
-
-### 4. Restart LibreChat:
-
-```bash
-docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
-```
-
----
-
-## Available Tools
+## Tools
 
 ### Search & Discovery
 | Tool | Description |
@@ -228,15 +266,18 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 | `get_available_queries` | Discover available GraphQL operations |
 | `execute_custom_query` | Run custom GraphQL queries |
 
-### Write Operations (requires user authentication)
+### Write Operations (require user authentication)
 | Tool | Description |
 |------|-------------|
 | `create_issue` | Create new issues |
 | `create_merge_request` | Create new merge requests |
 | `create_note` | Add a comment/note to an issue or merge request |
-| `manage_pipeline` | Retry or cancel a CI/CD pipeline |
 | `update_issue` | Update title, description, assignees, labels, due date |
 | `update_merge_request` | Update title, description, assignees, reviewers, labels |
+| `update_note` | Edit the body of an existing comment |
+| `delete_issue` | Delete an issue (issue author or maintainer required) |
+| `delete_note` | Delete a comment (note author or maintainer required) |
+| `manage_pipeline` | Retry or cancel a CI/CD pipeline |
 | `create_broadcast_message` | Create a broadcast message (instance admin) |
 | `update_broadcast_message` | Update a broadcast message (instance admin) |
 | `delete_broadcast_message` | Delete a broadcast message (instance admin) |
@@ -245,69 +286,64 @@ docker compose down && docker compose -f docker-compose.yml -f docker-compose.ov
 
 ## Configuration
 
-### Authentication Modes
-
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| **hybrid** (default) | Shared token for reads + per-user tokens for writes | Multi-user deployments |
-| **shared** | Single token for all operations | Single-user / trusted environments |
-| **per-user** | All operations require user authentication | High-security environments |
-
-### Environment Variables
+### Environment variables
 
 | Variable | Description | Default |
-|----------|-------------|---------|
+|---|---|---|
 | `GITLAB_URL` | GitLab instance URL | `https://gitlab.com` |
-| `GITLAB_AUTH_MODE` | Authentication mode (`hybrid`, `shared`, `per-user`) | `hybrid` |
-| `GITLAB_SHARED_ACCESS_TOKEN` | Shared token for read operations | — |
-| `GITLAB_MAX_PAGE_SIZE` | Maximum items per page (1-100) | `50` |
+| `GITLAB_TOKEN` | Full-access fallback token (reads + writes) | — |
+| `GITLAB_READ_TOKEN` | Read-only fallback token (writes always rejected) | — |
+| `GITLAB_MAX_PAGE_SIZE` | Maximum items per page (1–100) | `50` |
 | `GITLAB_TIMEOUT` | Request timeout in milliseconds | `30000` |
-| `GITLAB_MCP_PORT` | HTTP server port (LibreChat mode) | `8008` |
-| `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | stdio |
+| `GITLAB_MCP_PORT` | HTTP server port | `8008` |
+| `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | `stdio` |
+
+`GITLAB_TOKEN` and `GITLAB_READ_TOKEN` are **mutually exclusive**; setting both is a startup error.
+
+### Removed in 1.14.0
+
+- `GITLAB_AUTH_MODE` — the three-way enum is gone. Pick your deployment shape by which env var you set; see [Choose your deployment](#choose-your-deployment).
+- `GITLAB_SHARED_ACCESS_TOKEN` — rename to `GITLAB_TOKEN` (full access) or `GITLAB_READ_TOKEN` (read-only).
+
+Old env vars trigger a deprecation warning at startup and are otherwise ignored.
 
 ---
 
 ## Troubleshooting
 
-**Connection issues with LibreChat:**
-- Verify `type: streamable-http` in `librechat.yml` (not `sse`)
-- URL should be `http://gitlab-mcp:8008/` (the Docker service name, not localhost)
-- Ensure both containers share the same Docker network
-- Check logs: `docker logs gitlab-mcp`
+**"This operation requires authentication" / "Write operation requires a user token":**
+- For LibreChat: check the user filled in their PAT in the MCP Tool Select Dialog (or in their `customUserVars`).
+- For Claude Code: confirm `GITLAB_TOKEN` is set in the MCP server's `env` block.
+- If you set `GITLAB_READ_TOKEN`, write operations against it are rejected by design — supply per-call user creds for writes.
 
-**Authentication errors:**
-- Verify token has `read_api` or `api` scope and hasn't expired
-- For LibreChat: check the user provided a valid PAT in the credentials UI
+**Connection issues with LibreChat:**
+- `type: streamable-http` (not `sse`).
+- URL is the Docker service name (`http://gitlab-mcp:8008/`), not localhost, when LibreChat and gitlab-mcp share a Docker network.
+- `docker logs gitlab-mcp` shows session init and request lines.
 
 **Schema introspection failed:**
-- Requires GitLab 12.0+ with GraphQL API enabled
-- Verify `GITLAB_URL` is reachable from the container
+- GitLab 12.0+ with GraphQL API enabled.
+- Verify `GITLAB_URL` is reachable from the container.
 
 **Debug logging:**
+
 ```bash
-NODE_ENV=development GITLAB_URL=https://your-gitlab.com npm start
+NODE_ENV=development GITLAB_TOKEN=glpat-... npm start
 ```
 
 **Health check (HTTP mode):**
+
 ```bash
 curl http://localhost:8008/health
 ```
 
 ---
 
-## Testing
+## Changelog
 
-```bash
-# Test with MCP Inspector
-npx @modelcontextprotocol/inspector npx @ttpears/gitlab-mcp-server
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Submit a pull request
+See [`CHANGELOG.md`](./CHANGELOG.md). Releases before 1.14.0 are in
+[GitHub releases](https://github.com/ttpears/gitlab-mcp/releases).
 
 ## License
 
-MIT
+[MIT](./LICENSE)
