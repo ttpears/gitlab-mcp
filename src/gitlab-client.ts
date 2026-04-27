@@ -69,17 +69,20 @@ export interface PaginatedResult<T> {
 }
 
 export class GitLabGraphQLClient {
-  private baseClient: GraphQLClient | null = null;
+  // Cached clients keyed by token role. At most one of these is set.
+  private fullAccessClient?: GraphQLClient;
+  private readClient?: GraphQLClient;
   private config: Config;
   private schema: any = null;
   private userClients: Map<string, GraphQLClient> = new Map();
 
   constructor(config: Config) {
     this.config = config;
-    
-    // Create base client for shared operations (if shared token provided)
-    if (config.sharedAccessToken) {
-      this.baseClient = this.createClient(config.gitlabUrl, config.sharedAccessToken);
+
+    if (config.token) {
+      this.fullAccessClient = this.createClient(config.gitlabUrl, config.token);
+    } else if (config.readToken) {
+      this.readClient = this.createClient(config.gitlabUrl, config.readToken);
     }
   }
 
@@ -280,27 +283,31 @@ export class GitLabGraphQLClient {
   }
 
   private getClient(userConfig?: UserConfig, requiresWrite = false): GraphQLClient {
-    // If user config provided, use user-specific client
+    // 1. Per-call user credentials always win.
     if (userConfig) {
       return this.getUserClient(userConfig);
     }
-    
-    // If write operation required, user must provide credentials
+
+    // 2. Write operations: only the full-access env token is acceptable.
     if (requiresWrite) {
-      throw new Error('Write operations require user authentication. Please provide your GitLab credentials.');
+      if (this.fullAccessClient) {
+        return this.fullAccessClient;
+      }
+      throw new Error(
+        'Write operation requires a user token. Provide one via Authorization: Bearer ' +
+        '(HTTP) or userCredentials (stdio), or configure GITLAB_TOKEN.'
+      );
     }
-    
-    // For read operations, try shared client first
-    if (this.baseClient && this.config.authMode !== 'per-user') {
-      return this.baseClient;
-    }
-    
-    // If no shared client and hybrid/per-user mode, require user auth
-    if (this.config.authMode === 'per-user' || this.config.authMode === 'hybrid') {
-      throw new Error('This operation requires user authentication. Please provide your GitLab credentials.');
-    }
-    
-    throw new Error('No authentication configured. Please provide GitLab credentials or configure a shared access token.');
+
+    // 3. Read operations: either env token is acceptable.
+    if (this.fullAccessClient) return this.fullAccessClient;
+    if (this.readClient) return this.readClient;
+
+    // 4. No credentials at all.
+    throw new Error(
+      'This operation requires authentication. Configure GITLAB_TOKEN, ' +
+      'GITLAB_READ_TOKEN, or pass per-call user credentials.'
+    );
   }
 
   async introspectSchema(userConfig?: UserConfig): Promise<void> {
@@ -2422,12 +2429,22 @@ export class GitLabGraphQLClient {
       };
     }
     if (requiresWrite) {
-      throw new Error('Write operations require user authentication. Please provide your GitLab credentials.');
+      if (this.config.token) {
+        return { baseUrl: this.config.gitlabUrl, token: this.config.token };
+      }
+      throw new Error(
+        'Write operation requires a user token. Provide one via Authorization: Bearer ' +
+        '(HTTP) or userCredentials (stdio), or configure GITLAB_TOKEN.'
+      );
     }
-    if (this.config.sharedAccessToken && this.config.authMode !== 'per-user') {
-      return { baseUrl: this.config.gitlabUrl, token: this.config.sharedAccessToken };
+    const fallbackToken = this.config.token || this.config.readToken;
+    if (fallbackToken) {
+      return { baseUrl: this.config.gitlabUrl, token: fallbackToken };
     }
-    throw new Error('This operation requires user authentication. Please provide your GitLab credentials.');
+    throw new Error(
+      'This operation requires authentication. Configure GITLAB_TOKEN, ' +
+      'GITLAB_READ_TOKEN, or pass per-call user credentials.'
+    );
   }
 
   /**
