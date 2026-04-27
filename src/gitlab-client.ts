@@ -1967,31 +1967,20 @@ export class GitLabGraphQLClient {
   }
 
   /**
-   * Destroy an issue. Maps to GitLab GraphQL `destroyIssue` mutation.
+   * Destroy an issue. Uses the REST API (DELETE /projects/:id/issues/:iid)
+   * because GitLab's GraphQL schema does not expose a destroyIssue mutation.
    * Requires a user token (or GITLAB_TOKEN if configured as the env fallback).
    */
   async destroyIssue(
     projectPath: string,
     iid: string,
     userConfig?: UserConfig
-  ): Promise<{ errors: string[] }> {
-    const mutation = `
-      mutation DestroyIssue($input: DestroyIssueInput!) {
-        destroyIssue(input: $input) {
-          errors
-        }
-      }
-    `;
-    const result = await this.query<{ destroyIssue: { errors: string[] } }>(
-      mutation,
-      { input: { projectPath, iid } },
+  ): Promise<void> {
+    const encodedPath = encodeURIComponent(projectPath);
+    await this.restRequest('DELETE', `/projects/${encodedPath}/issues/${iid}`, {
       userConfig,
-      true
-    );
-    if (result.destroyIssue.errors.length > 0) {
-      throw new Error(`destroyIssue failed: ${result.destroyIssue.errors.join('; ')}`);
-    }
-    return result.destroyIssue;
+      requiresWrite: true,
+    });
   }
 
   /**

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.14.1] - 2026-04-27
+
+### Fixed
+
+- `delete_issue` now uses the REST API (`DELETE /projects/:id/issues/:iid`)
+  instead of a GraphQL mutation. GitLab's GraphQL schema does not expose a
+  `destroyIssue` mutation, so the 1.14.0 implementation failed with
+  `DestroyIssueInput isn't a defined input type` against any GitLab instance.
+
 ## [1.14.0] - 2026-04-27
 
 ### Removed
@@ -61,5 +70,6 @@ Old env vars trigger a deprecation warning at startup and are otherwise ignored.
 For releases before 1.14.0 see the
 [GitHub releases page](https://github.com/ttpears/gitlab-mcp/releases).
 
-[Unreleased]: https://github.com/ttpears/gitlab-mcp/compare/v1.14.0...HEAD
+[Unreleased]: https://github.com/ttpears/gitlab-mcp/compare/v1.14.1...HEAD
+[1.14.1]: https://github.com/ttpears/gitlab-mcp/releases/tag/v1.14.1
 [1.14.0]: https://github.com/ttpears/gitlab-mcp/releases/tag/v1.14.0
