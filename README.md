@@ -74,7 +74,15 @@ npm install -g @ttpears/gitlab-mcp-server
 
 ### Claude Desktop
 
-Add to `claude_desktop_config.json`:
+**Option A — MCPB one-click install (read-only):** download
+`gitlab-mcp-community-${VERSION}.mcpb` from the
+[latest GitHub Release](https://github.com/ttpears/gitlab-mcp/releases/latest)
+and drag it onto the Claude Desktop window. Fill in your GitLab URL and a
+read-only PAT (`read_api` scope) when prompted; the token is stored in your
+OS keychain. This bundle is intentionally read-only — use Option B if you need
+to create/update issues or MRs.
+
+**Option B — manual config (read or write):** add to `claude_desktop_config.json`:
 
 ```json
 {
