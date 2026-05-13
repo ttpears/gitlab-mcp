@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist-mcpb/
+*.mcpb
 docs/superpowers/
 .env
 .env.local

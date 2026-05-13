@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.2] - 2026-05-07
+
+### Added
+
+- MCPB (Claude Desktop / MCP Bundle) build. `npm run build:mcpb`
+  produces `gitlab-mcp-community-${VERSION}.mcpb` — a self-contained
+  zip with `manifest.json` + pruned `node_modules/`. The Release
+  workflow now attaches the bundle to each GitHub Release alongside
+  the existing npm and GHCR artifacts, so users can install via
+  one-click drag-and-drop into Claude Desktop. The bundle ships as
+  **read-only** (`GITLAB_READ_TOKEN` only) and is labeled
+  "GitLab (community, read-only)" to disambiguate from GitLab Inc.'s
+  first-party MCP server. Users who need write access should install
+  via npm or GHCR.
+
 ## [1.15.1] - 2026-05-07
 
 ### Fixed

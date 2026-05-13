@@ -1,0 +1,48 @@
+{
+  "manifest_version": "0.3",
+  "name": "gitlab-mcp-community",
+  "display_name": "GitLab (community, read-only)",
+  "version": "__VERSION__",
+  "description": "Community GitLab MCP server with GraphQL discovery and team-activity analytics. Read-only build. Not affiliated with GitLab Inc.'s first-party MCP server.",
+  "author": {
+    "name": "Tim Pearson",
+    "url": "https://github.com/ttpears/gitlab-mcp"
+  },
+  "homepage": "https://github.com/ttpears/gitlab-mcp",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ttpears/gitlab-mcp"
+  },
+  "license": "MIT",
+  "keywords": ["mcp", "gitlab", "graphql", "community"],
+  "server": {
+    "type": "node",
+    "entry_point": "node_modules/@ttpears/gitlab-mcp-server/dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/node_modules/@ttpears/gitlab-mcp-server/dist/index.js"
+      ],
+      "env": {
+        "GITLAB_URL": "${user_config.gitlab_url}",
+        "GITLAB_READ_TOKEN": "${user_config.gitlab_read_token}"
+      }
+    }
+  },
+  "user_config": {
+    "gitlab_url": {
+      "type": "string",
+      "title": "GitLab URL",
+      "description": "Base URL of your GitLab instance (e.g. https://gitlab.com or your self-hosted host).",
+      "default": "https://gitlab.com",
+      "required": true
+    },
+    "gitlab_read_token": {
+      "type": "string",
+      "title": "GitLab Read-Only PAT",
+      "description": "Personal access token with read_api scope. Stored in your OS keychain. Writes (create_issue, create_merge_request, etc.) will be rejected by this bundle — install via npm/GHCR if you need write access.",
+      "sensitive": true,
+      "required": true
+    }
+  }
+}
