@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.15.1] - 2026-05-07
+
+### Fixed
+
+- Write tools (`create_merge_request`, `create_issue`, `update_issue`,
+  `delete_issue`, `update_merge_request`, `manage_pipeline`, `create_note`,
+  `delete_note`, `update_note`, `create_broadcast_message`,
+  `update_broadcast_message`, `delete_broadcast_message`, and the
+  `requiresWrite` branch of `execute_custom_query`) no longer reject the
+  request when no per-call `userCredentials` are supplied. They now fall
+  back to `GITLAB_TOKEN` exactly as documented — a handler-level guard
+  was short-circuiting the four-step token resolution in `getClient()`,
+  so writes failed with "User authentication is required…" even when a
+  full-access env token was configured. Reads were unaffected. Per-call
+  user credentials and HTTP `Authorization: Bearer` flows continue to
+  work unchanged. Fixes #32.
+
 ## [1.15.0] - 2026-04-27
 
 ### Added

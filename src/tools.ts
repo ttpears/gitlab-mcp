@@ -209,9 +209,6 @@ const createIssueTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for creating issues. Please provide your GitLab credentials.');
-    }
     const result = await client.createIssue(input.projectPath, input.title, input.description, credentials);
     const payload = result.createIssue;
     if (payload.errors && payload.errors.length > 0) {
@@ -241,9 +238,6 @@ const createMergeRequestTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for creating merge requests. Please provide your GitLab credentials.');
-    }
     const result = await client.createMergeRequest(
       input.projectPath,
       input.title,
@@ -279,9 +273,6 @@ const executeCustomQueryTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (input.requiresWrite && !credentials) {
-      throw new Error('User authentication is required for write operations. Please provide your GitLab credentials.');
-    }
     return await client.query(input.query, input.variables, credentials, input.requiresWrite);
   },
 };
@@ -330,9 +321,6 @@ const updateIssueTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required to update issues.');
-    }
     const result = await client.updateIssueComposite(
       input.projectPath,
       input.iid,
@@ -363,9 +351,6 @@ const deleteIssueTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for deleting issues.');
-    }
     await client.destroyIssue(input.projectPath.trim(), input.iid.trim(), credentials);
     return { projectPath: input.projectPath, iid: input.iid, deleted: true };
   },
@@ -393,9 +378,6 @@ const updateMergeRequestTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required to update merge requests.');
-    }
     const result = await client.updateMergeRequestComposite(
       input.projectPath,
       input.iid,
@@ -913,9 +895,6 @@ const managePipelineTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for pipeline management. Please provide your GitLab credentials.');
-    }
     return await client.managePipeline(input.projectPath, input.pipelineIid, input.action, credentials);
   },
 };
@@ -1216,9 +1195,6 @@ const createNoteTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for creating notes. Please provide your GitLab credentials.');
-    }
     const result = await client.createNote(input.projectPath, input.noteableType, input.iid, input.body, input.internal, credentials);
     if (result.errors && result.errors.length > 0) {
       throw new Error(`Failed to create note: ${result.errors.join(', ')}`);
@@ -1240,9 +1216,6 @@ const deleteNoteTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for deleting notes.');
-    }
     await client.destroyNote(input.noteId.trim(), credentials);
     return { noteId: input.noteId, deleted: true };
   },
@@ -1262,9 +1235,6 @@ const updateNoteTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for updating notes.');
-    }
     const result = await client.updateNote(input.noteId.trim(), input.body, credentials);
     return result.note;
   },
@@ -1704,9 +1674,6 @@ const createBroadcastMessageTool: Tool = {
   inputSchema: withUserAuth(z.object(BroadcastMessageFields)),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for creating broadcast messages.');
-    }
     const { userCredentials, ...body } = input;
     return client.createBroadcastMessage(body, credentials);
   },
@@ -1734,9 +1701,6 @@ const updateBroadcastMessageTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for updating broadcast messages.');
-    }
     const { id, userCredentials, ...body } = input;
     return client.updateBroadcastMessage(id, body, credentials);
   },
@@ -1754,9 +1718,6 @@ const deleteBroadcastMessageTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('User authentication is required for deleting broadcast messages.');
-    }
     await client.deleteBroadcastMessage(input.id, credentials);
     return { id: input.id, deleted: true };
   },
