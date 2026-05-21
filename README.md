@@ -324,6 +324,7 @@ code search, or if you prefer OAuth.
 | `list_work_items` | List work items in a group or project, filtered by type and state |
 | `list_broadcast_messages` | List instance-wide broadcast messages |
 | `get_broadcast_message` | Get a specific broadcast message by ID |
+| `list_my_todos` | Authenticated user's to-do inbox — notifications about issues, MRs, mentions, reviews requested |
 | `list_my_events` | Authenticated user's activity feed — pushes, MRs, comments, approvals |
 | `list_user_events` | Another user's public activity feed by username or ID |
 | `list_project_events` | Activity events for a specific project |
@@ -346,6 +347,9 @@ code search, or if you prefer OAuth.
 | `create_broadcast_message` | Create a broadcast message (instance admin) |
 | `update_broadcast_message` | Update a broadcast message (instance admin) |
 | `delete_broadcast_message` | Delete a broadcast message (instance admin) |
+| `mark_todo_done` | Mark a single to-do item as done |
+| `mark_all_todos_done` | Mark all pending to-do items as done for the authenticated user |
+| `restore_todo` | Restore a previously-done to-do item back to pending |
 
 ---
 
