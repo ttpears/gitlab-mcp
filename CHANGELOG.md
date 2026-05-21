@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-05-21
+
 ### Added
 - Todo management tools: `list_my_todos`, `mark_todo_done`, `mark_all_todos_done`, `restore_todo`. Wraps GitLab's GraphQL `currentUser.todos` query and `todoMarkDone` / `todosMarkAllDone` / `todoRestore` mutations. Schema-introspection fallback drops unsupported filters on older self-hosted GitLab and surfaces a `_warning` field in the response.
 
