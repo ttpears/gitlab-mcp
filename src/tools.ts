@@ -1882,6 +1882,61 @@ const listMyTodosTool: Tool = {
   },
 };
 
+const markTodoDoneTool: Tool = {
+  name: 'mark_todo_done',
+  title: 'Mark Todo Done',
+  description:
+    'Mark a single to-do item as done for the authenticated user. Requires the todo\'s ID (numeric or full gid://gitlab/Todo/N form) from list_my_todos.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    todoId: z
+      .string()
+      .min(1)
+      .describe('Todo ID — accepts a bare numeric ID ("42") or a full gid ("gid://gitlab/Todo/42")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.markTodoDone(input.todoId.trim(), credentials);
+  },
+};
+
+const markAllTodosDoneTool: Tool = {
+  name: 'mark_all_todos_done',
+  title: 'Mark All Todos Done',
+  description:
+    'Mark every pending to-do item as done for the authenticated user. Irreversible without per-item restore_todo calls. Idempotent — succeeds even if there are zero pending todos.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({})),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.markAllTodosDone(credentials);
+  },
+};
+
+const restoreTodoTool: Tool = {
+  name: 'restore_todo',
+  title: 'Restore Todo',
+  description:
+    'Restore a previously-marked-done to-do item back to pending state. Accepts the todo\'s ID (numeric or full gid://gitlab/Todo/N form).',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    todoId: z
+      .string()
+      .min(1)
+      .describe('Todo ID — accepts a bare numeric ID ("42") or a full gid ("gid://gitlab/Todo/42")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.restoreTodo(input.todoId.trim(), credentials);
+  },
+};
+
 const listMyEventsTool: Tool = {
   name: 'list_my_events',
   title: 'My Events',
@@ -2339,6 +2394,9 @@ export const writeTools: Tool[] = [
   createBroadcastMessageTool,
   updateBroadcastMessageTool,
   deleteBroadcastMessageTool,
+  markTodoDoneTool,
+  markAllTodosDoneTool,
+  restoreTodoTool,
 ];
 
 export const searchTools: Tool[] = [
