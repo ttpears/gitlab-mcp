@@ -41,7 +41,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           gh release create "${GITHUB_REF_NAME}" \
             --generate-notes \
-            "gitlab-mcp-community-${VERSION}.mcpb#GitLab (community, read-only) — Claude Desktop / MCPB bundle"
+            "gitlab-mcp-community-${VERSION}.mcpb#GitLab (community) — Claude Desktop / MCPB bundle"
 
   docker:
     name: Build and push container image

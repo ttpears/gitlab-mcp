@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-05-21
+
+### Changed
+- MCPB (Claude Desktop) bundle now allows write access. The single PAT
+  field is mapped to `GITLAB_TOKEN`, so users can supply a `read_api`-scoped
+  token for read-only access or an `api`-scoped token to enable writes
+  (`create_issue`, `create_merge_request`, etc.). Bundle display name
+  changed from "GitLab (community, read-only)" to "GitLab (community)" and
+  the manifest `user_config` field was renamed `gitlab_read_token` →
+  `gitlab_token`. Existing installs will prompt to re-enter the PAT on
+  upgrade because of the renamed config key.
+
 ## [1.16.0] - 2026-05-21
 
 ### Added
