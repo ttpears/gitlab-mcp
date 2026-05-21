@@ -2566,6 +2566,172 @@ export class GitLabGraphQLClient {
   }
 
   /**
+   * List the authenticated user's GitLab todos. Always scoped to the caller via
+   * `currentUser.todos`. Filters are passed through to GraphQL; if the
+   * self-hosted GitLab schema is missing an enum value or filter argument we
+   * drop it and add a `_warning` field to the response, matching the fallback
+   * pattern used by updateIssueComposite.
+   */
+  async listMyTodos(
+    params: {
+      state?: string;
+      action?: string;
+      type?: string;
+      groupPath?: string;
+      projectPath?: string;
+      first?: number;
+      after?: string;
+      fetchAll?: boolean;
+    },
+    userConfig?: UserConfig
+  ): Promise<any> {
+    await this.introspectSchema(userConfig);
+
+    const first = params.first ?? 20;
+    const fetchAll = params.fetchAll ?? false;
+
+    const currentUserType = this.schema.getType('CurrentUser') || this.schema.getType('UserCore');
+    const todosField = currentUserType?.getFields?.()?.['todos'];
+    if (!todosField) {
+      throw new Error('GitLab GraphQL schema does not expose currentUser.todos on this instance.');
+    }
+    const todosArgs: any[] = todosField.args || [];
+    const argNames = new Set(todosArgs.map((a: any) => a.name));
+
+    const warnings: string[] = [];
+
+    const stateEnumName = this.getTypeName(todosArgs.find((a: any) => a.name === 'state')?.type) || 'TodoStateEnum';
+    const stateAllowed = this.getEnumValues(stateEnumName).map(v => String(v));
+    let stateFilter: string[] | undefined;
+    if (params.state && params.state.toLowerCase() !== 'all') {
+      const match = stateAllowed.find(v => v.toLowerCase() === params.state!.toLowerCase());
+      if (match) {
+        stateFilter = [match];
+      } else {
+        warnings.push(`state=${params.state} not supported by this GitLab; returning all states`);
+      }
+    // state='all': GitLab defaults to [PENDING], so we must enumerate explicitly — unlike issues/MRs where omitting the filter returns all states.
+    } else if (params.state?.toLowerCase() === 'all') {
+      if (stateAllowed.length >= 2) {
+        stateFilter = stateAllowed;
+      }
+    } else {
+      const match = stateAllowed.find(v => v.toLowerCase() === 'pending');
+      if (match) stateFilter = [match];
+    }
+
+    const actionEnumName = this.getTypeName(todosArgs.find((a: any) => a.name === 'action')?.type) || 'TodoActionEnum';
+    let actionFilter: string[] | undefined;
+    if (params.action) {
+      if (!argNames.has('action')) {
+        warnings.push(`action filter not supported by this GitLab; ignoring`);
+      } else {
+        const actionAllowed = this.getEnumValues(actionEnumName).map(v => String(v));
+        const match = actionAllowed.find(v => v.toLowerCase() === params.action!.toLowerCase());
+        if (match) {
+          actionFilter = [match];
+        } else {
+          warnings.push(`action=${params.action} not in this GitLab's ${actionEnumName}; ignoring`);
+        }
+      }
+    }
+
+    const typeEnumName = this.getTypeName(todosArgs.find((a: any) => a.name === 'type')?.type) || 'TodoTargetEnum';
+    let typeFilter: string[] | undefined;
+    if (params.type) {
+      if (!argNames.has('type')) {
+        warnings.push(`type filter not supported by this GitLab; ignoring`);
+      } else {
+        const typeAllowed = this.getEnumValues(typeEnumName).map(v => String(v));
+        const match = typeAllowed.find(v => v.toLowerCase() === params.type!.toLowerCase());
+        if (match) {
+          typeFilter = [match];
+        } else {
+          warnings.push(`type=${params.type} not in this GitLab's ${typeEnumName}; ignoring`);
+        }
+      }
+    }
+
+    const groupArgName = argNames.has('groupId') ? 'groupId' : (argNames.has('group') ? 'group' : undefined);
+    const projectArgName = argNames.has('projectId') ? 'projectId' : (argNames.has('project') ? 'project' : undefined);
+
+    if (params.groupPath && !groupArgName) warnings.push('group filter not supported by this GitLab; ignoring');
+    if (params.projectPath && !projectArgName) warnings.push('project filter not supported by this GitLab; ignoring');
+
+    const variableDefs: string[] = ['$first: Int!', '$after: String'];
+    const argParts: string[] = ['first: $first', 'after: $after'];
+    const variables: Record<string, any> = { first, after: params.after };
+
+    if (stateFilter) {
+      variableDefs.push(`$state: [${stateEnumName}!]`);
+      argParts.push('state: $state');
+      variables.state = stateFilter;
+    }
+    if (actionFilter) {
+      variableDefs.push(`$action: [${actionEnumName}!]`);
+      argParts.push('action: $action');
+      variables.action = actionFilter;
+    }
+    if (typeFilter) {
+      variableDefs.push(`$type: [${typeEnumName}!]`);
+      argParts.push('type: $type');
+      variables.type = typeFilter;
+    }
+    if (params.groupPath && groupArgName) {
+      variableDefs.push(`$${groupArgName}: ID!`);
+      argParts.push(`${groupArgName}: $${groupArgName}`);
+      variables[groupArgName] = params.groupPath.trim();
+    }
+    if (params.projectPath && projectArgName) {
+      variableDefs.push(`$${projectArgName}: ID!`);
+      argParts.push(`${projectArgName}: $${projectArgName}`);
+      variables[projectArgName] = params.projectPath.trim();
+    }
+
+    const query = gql`
+      query listMyTodos(${variableDefs.join(', ')}) {
+        currentUser {
+          todos(${argParts.join(', ')}) {
+            pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+            nodes {
+              id
+              body
+              state
+              action
+              targetType
+              createdAt
+              author { username name }
+              group { fullPath name }
+              project { fullPath name }
+              target {
+                ... on Issue { id iid title webUrl state }
+                ... on MergeRequest { id iid title webUrl state }
+                ... on Epic { id iid title webUrl state }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    if (fetchAll) {
+      const result = await this.fetchAllPages(query, variables, 'currentUser.todos', {
+        maxItems: first,
+        pageSize: this.config.maxPageSize,
+        userConfig,
+      });
+      return warnings.length > 0 ? { ...result, _warning: warnings.join('; ') } : result;
+    }
+
+    const result = await this.query<any>(query, variables, userConfig);
+    const connection = result?.currentUser?.todos;
+    if (!connection) {
+      throw new Error('currentUser.todos returned no data — check that the configured token belongs to a real user.');
+    }
+    return warnings.length > 0 ? { ...connection, _warning: warnings.join('; ') } : connection;
+  }
+
+  /**
    * Resolve the GitLab base URL and access token for a REST call, honoring
    * per-request user credentials and falling back to the configured env token.
    */
