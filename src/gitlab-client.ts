@@ -2614,6 +2614,8 @@ export class GitLabGraphQLClient {
     } else if (params.state?.toLowerCase() === 'all') {
       if (stateAllowed.length >= 2) {
         stateFilter = stateAllowed;
+      } else {
+        warnings.push('state=all not fully supported by this GitLab (TodoStateEnum has fewer than 2 values); results may only include pending todos');
       }
     } else {
       const match = stateAllowed.find(v => v.toLowerCase() === 'pending');
