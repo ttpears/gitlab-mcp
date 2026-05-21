@@ -1818,6 +1818,125 @@ const EventCommonFields = {
   per_page: z.number().int().min(1).max(100).default(20).describe('Results per page'),
 };
 
+// ─── Todos (authenticated user's to-do inbox) ────────────────────────────────
+
+const listMyTodosTool: Tool = {
+  name: 'list_my_todos',
+  title: 'My Todos',
+  description:
+    'List the authenticated user\'s GitLab to-do items (notifications about issues, MRs, mentions, reviews requested, etc.). Filter by state, action, target type, or group/project. Requires user authentication.',
+  requiresAuth: true,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    state: z
+      .enum(['pending', 'done', 'all'])
+      .default('pending')
+      .describe('Filter by todo state: pending (default), done, or all'),
+    action: z
+      .string()
+      .optional()
+      .describe('Filter by todo action — e.g. assigned, mentioned, build_failed, marked, approval_required, unmergeable, directly_addressed, review_requested'),
+    type: z
+      .string()
+      .optional()
+      .describe('Filter by target type — e.g. Issue, MergeRequest, Epic, Commit, DesignManagement::Design, AlertManagement::Alert'),
+    groupPath: z
+      .string()
+      .optional()
+      .describe('Limit to a group by full path (e.g. "my-org/platform")'),
+    projectPath: z
+      .string()
+      .optional()
+      .describe('Limit to a project by full path (e.g. "my-org/my-repo")'),
+    first: z.number().min(1).max(100).default(20).describe('Number of todos to retrieve'),
+    after: z.string().optional().describe('Cursor for pagination'),
+    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    if (!credentials) {
+      throw new Error('list_my_todos requires user authentication — the to-do inbox is scoped to the caller.');
+    }
+    const groupPath = input.groupPath?.trim();
+    const projectPath = input.projectPath?.trim();
+    if (input.groupPath !== undefined && !groupPath) {
+      throw new Error('groupPath cannot be empty or whitespace');
+    }
+    if (input.projectPath !== undefined && !projectPath) {
+      throw new Error('projectPath cannot be empty or whitespace');
+    }
+    return client.listMyTodos(
+      {
+        state: input.state,
+        action: input.action,
+        type: input.type,
+        groupPath,
+        projectPath,
+        first: input.first,
+        after: input.after,
+        fetchAll: input.fetchAll,
+      },
+      credentials,
+    );
+  },
+};
+
+const markTodoDoneTool: Tool = {
+  name: 'mark_todo_done',
+  title: 'Mark Todo Done',
+  description:
+    'Mark a single to-do item as done for the authenticated user. Requires the todo\'s ID (numeric or full gid://gitlab/Todo/N form) from list_my_todos.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    todoId: z
+      .string()
+      .min(1)
+      .describe('Todo ID — accepts a bare numeric ID ("42") or a full gid ("gid://gitlab/Todo/42")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.markTodoDone(input.todoId.trim(), credentials);
+  },
+};
+
+const markAllTodosDoneTool: Tool = {
+  name: 'mark_all_todos_done',
+  title: 'Mark All Todos Done',
+  description:
+    'Mark every pending to-do item as done for the authenticated user. Irreversible without per-item restore_todo calls. Idempotent — succeeds even if there are zero pending todos.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({})),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.markAllTodosDone(credentials);
+  },
+};
+
+const restoreTodoTool: Tool = {
+  name: 'restore_todo',
+  title: 'Restore Todo',
+  description:
+    'Restore a previously-marked-done to-do item back to pending state. Accepts the todo\'s ID (numeric or full gid://gitlab/Todo/N form).',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    todoId: z
+      .string()
+      .min(1)
+      .describe('Todo ID — accepts a bare numeric ID ("42") or a full gid ("gid://gitlab/Todo/42")'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.restoreTodo(input.todoId.trim(), credentials);
+  },
+};
+
 const listMyEventsTool: Tool = {
   name: 'list_my_events',
   title: 'My Events',
@@ -2275,6 +2394,9 @@ export const writeTools: Tool[] = [
   createBroadcastMessageTool,
   updateBroadcastMessageTool,
   deleteBroadcastMessageTool,
+  markTodoDoneTool,
+  markAllTodosDoneTool,
+  restoreTodoTool,
 ];
 
 export const searchTools: Tool[] = [
@@ -2284,6 +2406,7 @@ export const searchTools: Tool[] = [
   searchMergeRequestsTool,
   getUserIssuesTool,
   getUserMergeRequestsTool,
+  listMyTodosTool,
   searchUsersTool,
   searchGroupsTool,
   searchLabelsTool,
