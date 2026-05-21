@@ -2732,6 +2732,92 @@ export class GitLabGraphQLClient {
   }
 
   /**
+   * Mark a single todo as done. Accepts either a bare numeric ID or a full
+   * gid:// URL. Requires write capability.
+   */
+  async markTodoDone(
+    todoId: string,
+    userConfig?: UserConfig
+  ): Promise<{ todo: { id: string; state: string } | null; errors: string[] }> {
+    const gid = todoId.startsWith('gid://') ? todoId : `gid://gitlab/Todo/${todoId}`;
+    const mutation = `
+      mutation TodoMarkDone($input: TodoMarkDoneInput!) {
+        todoMarkDone(input: $input) {
+          todo { id state }
+          errors
+        }
+      }
+    `;
+    const result = await this.query<{ todoMarkDone: { todo: any; errors: string[] } }>(
+      mutation,
+      { input: { id: gid } },
+      userConfig,
+      true
+    );
+    if (result.todoMarkDone.errors && result.todoMarkDone.errors.length > 0) {
+      throw new Error(`todoMarkDone failed: ${result.todoMarkDone.errors.join('; ')}`);
+    }
+    return result.todoMarkDone;
+  }
+
+  /**
+   * Mark every pending todo for the authenticated user as done. Requires
+   * write capability. Idempotent: succeeds (with an empty updatedIds list)
+   * when nothing is pending.
+   */
+  async markAllTodosDone(
+    userConfig?: UserConfig
+  ): Promise<{ updatedIds: string[]; errors: string[] }> {
+    const mutation = `
+      mutation TodosMarkAllDone {
+        todosMarkAllDone(input: {}) {
+          updatedIds
+          errors
+        }
+      }
+    `;
+    const result = await this.query<{ todosMarkAllDone: { updatedIds: string[]; errors: string[] } }>(
+      mutation,
+      {},
+      userConfig,
+      true
+    );
+    if (result.todosMarkAllDone.errors && result.todosMarkAllDone.errors.length > 0) {
+      throw new Error(`todosMarkAllDone failed: ${result.todosMarkAllDone.errors.join('; ')}`);
+    }
+    return result.todosMarkAllDone;
+  }
+
+  /**
+   * Restore a single previously-done todo back to pending. Accepts either a
+   * bare numeric ID or a full gid:// URL. Requires write capability.
+   */
+  async restoreTodo(
+    todoId: string,
+    userConfig?: UserConfig
+  ): Promise<{ todo: { id: string; state: string } | null; errors: string[] }> {
+    const gid = todoId.startsWith('gid://') ? todoId : `gid://gitlab/Todo/${todoId}`;
+    const mutation = `
+      mutation TodoRestore($input: TodoRestoreInput!) {
+        todoRestore(input: $input) {
+          todo { id state }
+          errors
+        }
+      }
+    `;
+    const result = await this.query<{ todoRestore: { todo: any; errors: string[] } }>(
+      mutation,
+      { input: { id: gid } },
+      userConfig,
+      true
+    );
+    if (result.todoRestore.errors && result.todoRestore.errors.length > 0) {
+      throw new Error(`todoRestore failed: ${result.todoRestore.errors.join('; ')}`);
+    }
+    return result.todoRestore;
+  }
+
+  /**
    * Resolve the GitLab base URL and access token for a REST call, honoring
    * per-request user credentials and falling back to the configured env token.
    */
