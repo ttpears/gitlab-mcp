@@ -1,9 +1,9 @@
 {
   "manifest_version": "0.3",
   "name": "gitlab-mcp-community",
-  "display_name": "GitLab (community, read-only)",
+  "display_name": "GitLab (community)",
   "version": "__VERSION__",
-  "description": "Community GitLab MCP server with GraphQL discovery and team-activity analytics. Read-only build. Not affiliated with GitLab Inc.'s first-party MCP server.",
+  "description": "Community GitLab MCP server with GraphQL discovery and team-activity analytics. Not affiliated with GitLab Inc.'s first-party MCP server.",
   "author": {
     "name": "Tim Pearson",
     "url": "https://github.com/ttpears/gitlab-mcp"
@@ -25,7 +25,7 @@
       ],
       "env": {
         "GITLAB_URL": "${user_config.gitlab_url}",
-        "GITLAB_READ_TOKEN": "${user_config.gitlab_read_token}"
+        "GITLAB_TOKEN": "${user_config.gitlab_token}"
       }
     }
   },
@@ -37,10 +37,10 @@
       "default": "https://gitlab.com",
       "required": true
     },
-    "gitlab_read_token": {
+    "gitlab_token": {
       "type": "string",
-      "title": "GitLab Read-Only PAT",
-      "description": "Personal access token with read_api scope. Stored in your OS keychain. Writes (create_issue, create_merge_request, etc.) will be rejected by this bundle — install via npm/GHCR if you need write access.",
+      "title": "GitLab Personal Access Token",
+      "description": "Personal access token. Use a read_api-scoped PAT for read-only access, or an api-scoped PAT to also allow writes (create_issue, create_merge_request, etc.). Stored in your OS keychain.",
       "sensitive": true,
       "required": true
     }
