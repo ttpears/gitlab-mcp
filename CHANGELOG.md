@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.18.1] - 2026-05-21
+
+### Fixed
+- `list_my_todos` and `list_my_events` no longer reject the call when no per-request `userCredentials` are supplied. Both handlers had a guard that short-circuited the four-step token resolution in `getClient()`, so they failed with `requires user authentication — the to-do inbox is scoped to the caller` even when a valid `GITLAB_TOKEN` was configured. Same bug class as the 1.15.1 fix, which only patched the write tools. Reads now fall back to the env token like every other read tool. Per-call user credentials and HTTP `Authorization: Bearer` flows continue to work unchanged.
+
 ## [1.18.0] - 2026-05-21
 
 ### Fixed
