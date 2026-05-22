@@ -1867,9 +1867,6 @@ const listMyTodosTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('list_my_todos requires user authentication — the to-do inbox is scoped to the caller.');
-    }
     const groupPath = input.groupPath?.trim();
     const projectPath = input.projectPath?.trim();
     if (input.groupPath !== undefined && !groupPath) {
@@ -2012,9 +2009,6 @@ const listMyEventsTool: Tool = {
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    if (!credentials) {
-      throw new Error('list_my_events requires user authentication — the feed is scoped to the caller.');
-    }
     const { userCredentials, ...params } = input;
     return client.listMyEvents(params, credentials);
   },
