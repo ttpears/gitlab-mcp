@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.18.0] - 2026-05-21
+
+### Fixed
+- `mark_all_todos_done` no longer fails with `Field 'updatedIds' doesn't exist on type 'TodosMarkAllDonePayload'`. The shipped query selected a non-existent payload field on every GitLab instance; it now selects `todos { id state }` (the actual payload shape) and returns the list of updated todos.
+- `list_my_todos` `groupPath` / `projectPath` filters now actually filter. The previous implementation passed path strings as the value of the `groupId` / `projectId` arguments (which expect `[ID!]` node GIDs, not paths), causing GitLab to silently ignore the filter and return every todo. Paths are now resolved to GIDs via `group(fullPath:)` / `project(fullPath:)` before the todos query runs.
+- `list_my_todos` `target` selection now uses the `Todoable` interface plus inline fragments. Todos targeting `WorkItem`, `Commit`, `AlertManagement::Alert`, etc. previously came back as empty objects; they now return `__typename`, `name`, and `webUrl` from the interface.
+
+### Added
+- `list_my_todos` exposes `authorIds`, `isSnoozed`, and `sort` filters that already exist on the GitLab schema but weren't surfaced.
+- `list_my_todos` response now includes `targetUrl` (direct deep link to the todo target), `note { id body }` (the comment that triggered mention/directly-addressed todos), and `snoozedUntil` — schema-guarded so older self-hosted GitLab instances that lack the fields still work.
+- `mark_all_todos_done` accepts optional scoping args (`groupPath`, `projectPath`, `action`, `type`, `authorIds`, `targetId`) so callers can mark a subset of pending todos done — matching `TodosMarkAllDoneInput`. With no args it still marks every pending todo as before.
+
 ## [1.17.0] - 2026-05-21
 
 ### Changed

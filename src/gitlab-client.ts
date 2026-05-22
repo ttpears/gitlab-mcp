@@ -2566,11 +2566,39 @@ export class GitLabGraphQLClient {
   }
 
   /**
-   * List the authenticated user's GitLab todos. Always scoped to the caller via
-   * `currentUser.todos`. Filters are passed through to GraphQL; if the
-   * self-hosted GitLab schema is missing an enum value or filter argument we
-   * drop it and add a `_warning` field to the response, matching the fallback
-   * pattern used by updateIssueComposite.
+   * Resolve a GitLab group's full path (e.g. "gleim/foo") to its node GID.
+   * Returns undefined if the group can't be found; callers can surface that as
+   * a warning instead of failing the whole query.
+   */
+  private async resolveGroupGid(fullPath: string, userConfig?: UserConfig): Promise<string | undefined> {
+    const query = gql`
+      query resolveGroupGid($fullPath: ID!) {
+        group(fullPath: $fullPath) { id }
+      }
+    `;
+    const result = await this.query<{ group: { id: string } | null }>(query, { fullPath }, userConfig);
+    return result.group?.id;
+  }
+
+  /**
+   * Resolve a GitLab project's full path (e.g. "gleim/foo/bar") to its node GID.
+   */
+  private async resolveProjectGid(fullPath: string, userConfig?: UserConfig): Promise<string | undefined> {
+    const query = gql`
+      query resolveProjectGid($fullPath: ID!) {
+        project(fullPath: $fullPath) { id }
+      }
+    `;
+    const result = await this.query<{ project: { id: string } | null }>(query, { fullPath }, userConfig);
+    return result.project?.id;
+  }
+
+  /**
+   * List the authenticated user's GitLab todos via `currentUser.todos`. Path
+   * filters are resolved to node GIDs before being passed as `groupId` /
+   * `projectId` (the schema accepts `[ID!]`, not paths). Enum filters are
+   * validated against the live schema via introspection; unsupported values
+   * are dropped with a `_warning` in the response.
    */
   async listMyTodos(
     params: {
@@ -2579,6 +2607,9 @@ export class GitLabGraphQLClient {
       type?: string;
       groupPath?: string;
       projectPath?: string;
+      authorIds?: string[];
+      isSnoozed?: boolean;
+      sort?: string;
       first?: number;
       after?: string;
       fetchAll?: boolean;
@@ -2590,10 +2621,10 @@ export class GitLabGraphQLClient {
     const first = params.first ?? 20;
     const fetchAll = params.fetchAll ?? false;
 
-    const currentUserType = this.schema.getType('CurrentUser') || this.schema.getType('UserCore');
-    const todosField = currentUserType?.getFields?.()?.['todos'];
+    const userType = this.schema.getType('CurrentUser') || this.schema.getType('User') || this.schema.getType('UserCore');
+    const todosField = userType?.getFields?.()?.['todos'];
     if (!todosField) {
-      throw new Error('GitLab GraphQL schema does not expose currentUser.todos on this instance.');
+      throw new Error('GitLab GraphQL schema does not expose User.todos on this instance.');
     }
     const todosArgs: any[] = todosField.args || [];
     const argNames = new Set(todosArgs.map((a: any) => a.name));
@@ -2610,7 +2641,6 @@ export class GitLabGraphQLClient {
       } else {
         warnings.push(`state=${params.state} not supported by this GitLab; returning all states`);
       }
-    // state='all': GitLab defaults to [PENDING], so we must enumerate explicitly — unlike issues/MRs where omitting the filter returns all states.
     } else if (params.state?.toLowerCase() === 'all') {
       if (stateAllowed.length >= 2) {
         stateFilter = stateAllowed;
@@ -2654,11 +2684,60 @@ export class GitLabGraphQLClient {
       }
     }
 
-    const groupArgName = argNames.has('groupId') ? 'groupId' : (argNames.has('group') ? 'group' : undefined);
-    const projectArgName = argNames.has('projectId') ? 'projectId' : (argNames.has('project') ? 'project' : undefined);
+    let groupIdFilter: string[] | undefined;
+    if (params.groupPath) {
+      if (!argNames.has('groupId')) {
+        warnings.push('groupId filter not supported by this GitLab; ignoring groupPath');
+      } else {
+        const gid = await this.resolveGroupGid(params.groupPath.trim(), userConfig);
+        if (gid) {
+          groupIdFilter = [gid];
+        } else {
+          warnings.push(`group ${params.groupPath} not found; ignoring filter`);
+        }
+      }
+    }
 
-    if (params.groupPath && !groupArgName) warnings.push('group filter not supported by this GitLab; ignoring');
-    if (params.projectPath && !projectArgName) warnings.push('project filter not supported by this GitLab; ignoring');
+    let projectIdFilter: string[] | undefined;
+    if (params.projectPath) {
+      if (!argNames.has('projectId')) {
+        warnings.push('projectId filter not supported by this GitLab; ignoring projectPath');
+      } else {
+        const gid = await this.resolveProjectGid(params.projectPath.trim(), userConfig);
+        if (gid) {
+          projectIdFilter = [gid];
+        } else {
+          warnings.push(`project ${params.projectPath} not found; ignoring filter`);
+        }
+      }
+    }
+
+    let authorIdFilter: string[] | undefined;
+    if (params.authorIds && params.authorIds.length > 0) {
+      if (!argNames.has('authorId')) {
+        warnings.push('authorId filter not supported by this GitLab; ignoring');
+      } else {
+        authorIdFilter = params.authorIds.map(id =>
+          id.startsWith('gid://') ? id : `gid://gitlab/User/${id}`
+        );
+      }
+    }
+
+    const sortEnumName = this.getTypeName(todosArgs.find((a: any) => a.name === 'sort')?.type) || 'TodoSort';
+    let sortFilter: string | undefined;
+    if (params.sort) {
+      if (!argNames.has('sort')) {
+        warnings.push('sort not supported by this GitLab; ignoring');
+      } else {
+        const sortAllowed = this.getEnumValues(sortEnumName).map(v => String(v));
+        const match = sortAllowed.find(v => v.toLowerCase() === params.sort!.toLowerCase());
+        if (match) {
+          sortFilter = match;
+        } else {
+          warnings.push(`sort=${params.sort} not in ${sortEnumName}; ignoring`);
+        }
+      }
+    }
 
     const variableDefs: string[] = ['$first: Int!', '$after: String'];
     const argParts: string[] = ['first: $first', 'after: $after'];
@@ -2679,16 +2758,38 @@ export class GitLabGraphQLClient {
       argParts.push('type: $type');
       variables.type = typeFilter;
     }
-    if (params.groupPath && groupArgName) {
-      variableDefs.push(`$${groupArgName}: ID!`);
-      argParts.push(`${groupArgName}: $${groupArgName}`);
-      variables[groupArgName] = params.groupPath.trim();
+    if (groupIdFilter) {
+      variableDefs.push('$groupId: [ID!]');
+      argParts.push('groupId: $groupId');
+      variables.groupId = groupIdFilter;
     }
-    if (params.projectPath && projectArgName) {
-      variableDefs.push(`$${projectArgName}: ID!`);
-      argParts.push(`${projectArgName}: $${projectArgName}`);
-      variables[projectArgName] = params.projectPath.trim();
+    if (projectIdFilter) {
+      variableDefs.push('$projectId: [ID!]');
+      argParts.push('projectId: $projectId');
+      variables.projectId = projectIdFilter;
     }
+    if (authorIdFilter) {
+      variableDefs.push('$authorId: [ID!]');
+      argParts.push('authorId: $authorId');
+      variables.authorId = authorIdFilter;
+    }
+    if (params.isSnoozed !== undefined && argNames.has('isSnoozed')) {
+      variableDefs.push('$isSnoozed: Boolean');
+      argParts.push('isSnoozed: $isSnoozed');
+      variables.isSnoozed = params.isSnoozed;
+    } else if (params.isSnoozed !== undefined) {
+      warnings.push('isSnoozed filter not supported by this GitLab; ignoring');
+    }
+    if (sortFilter) {
+      variableDefs.push(`$sort: ${sortEnumName}`);
+      argParts.push('sort: $sort');
+      variables.sort = sortFilter;
+    }
+
+    const todoFields = this.schema.getType('Todo')?.getFields?.() || {};
+    const targetUrlField = todoFields['targetUrl'] ? 'targetUrl' : '';
+    const noteField = todoFields['note'] ? 'note { id body }' : '';
+    const snoozedUntilField = todoFields['snoozedUntil'] ? 'snoozedUntil' : '';
 
     const query = gql`
       query listMyTodos(${variableDefs.join(', ')}) {
@@ -2702,13 +2803,18 @@ export class GitLabGraphQLClient {
               action
               targetType
               createdAt
+              ${targetUrlField}
+              ${snoozedUntilField}
+              ${noteField}
               author { username name }
               group { fullPath name }
               project { fullPath name }
               target {
+                __typename
                 ... on Issue { id iid title webUrl state }
                 ... on MergeRequest { id iid title webUrl state }
                 ... on Epic { id iid title webUrl state }
+                ... on WorkItem { id iid title webUrl }
               }
             }
           }
@@ -2763,24 +2869,57 @@ export class GitLabGraphQLClient {
   }
 
   /**
-   * Mark every pending todo for the authenticated user as done. Requires
-   * write capability. Idempotent: succeeds (with an empty updatedIds list)
-   * when nothing is pending.
+   * Mark the authenticated user's pending todos as done. Defaults to "every
+   * pending todo" but accepts optional scoping filters that match
+   * `TodosMarkAllDoneInput`: targetId, authorIds, groupPath, projectPath,
+   * action, type. Paths are resolved to node GIDs before the mutation runs.
+   * Returns the actual updated todos (id + state) — the schema does not
+   * expose an updatedIds field on the payload.
    */
   async markAllTodosDone(
+    params: {
+      targetId?: string;
+      authorIds?: string[];
+      groupPath?: string;
+      projectPath?: string;
+      action?: string;
+      type?: string;
+    } = {},
     userConfig?: UserConfig
-  ): Promise<{ updatedIds: string[]; errors: string[] }> {
+  ): Promise<{ todos: Array<{ id: string; state: string }>; errors: string[] }> {
+    const input: Record<string, any> = {};
+    if (params.targetId) {
+      input.targetId = params.targetId.startsWith('gid://') ? params.targetId : params.targetId;
+    }
+    if (params.authorIds && params.authorIds.length > 0) {
+      input.authorId = params.authorIds.map(id =>
+        id.startsWith('gid://') ? id : `gid://gitlab/User/${id}`
+      );
+    }
+    if (params.groupPath) {
+      const gid = await this.resolveGroupGid(params.groupPath.trim(), userConfig);
+      if (!gid) throw new Error(`group not found: ${params.groupPath}`);
+      input.groupId = gid;
+    }
+    if (params.projectPath) {
+      const gid = await this.resolveProjectGid(params.projectPath.trim(), userConfig);
+      if (!gid) throw new Error(`project not found: ${params.projectPath}`);
+      input.projectId = gid;
+    }
+    if (params.action) input.action = [params.action.toUpperCase()];
+    if (params.type) input.type = [params.type];
+
     const mutation = `
-      mutation TodosMarkAllDone {
-        todosMarkAllDone(input: {}) {
-          updatedIds
+      mutation TodosMarkAllDone($input: TodosMarkAllDoneInput!) {
+        todosMarkAllDone(input: $input) {
+          todos { id state }
           errors
         }
       }
     `;
-    const result = await this.query<{ todosMarkAllDone: { updatedIds: string[]; errors: string[] } }>(
+    const result = await this.query<{ todosMarkAllDone: { todos: Array<{ id: string; state: string }>; errors: string[] } }>(
       mutation,
-      {},
+      { input },
       userConfig,
       true
     );
