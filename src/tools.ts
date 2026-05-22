@@ -1844,11 +1844,23 @@ const listMyTodosTool: Tool = {
     groupPath: z
       .string()
       .optional()
-      .describe('Limit to a group by full path (e.g. "my-org/platform")'),
+      .describe('Limit to a group by full path (e.g. "my-org/platform"). Resolved to a node GID server-side before filtering.'),
     projectPath: z
       .string()
       .optional()
-      .describe('Limit to a project by full path (e.g. "my-org/my-repo")'),
+      .describe('Limit to a project by full path (e.g. "my-org/my-repo"). Resolved to a node GID server-side before filtering.'),
+    authorIds: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Filter by todo authors. Accepts numeric user IDs or full gid://gitlab/User/N strings.'),
+    isSnoozed: z
+      .boolean()
+      .optional()
+      .describe('Filter by snooze state: true → only snoozed, false → only non-snoozed.'),
+    sort: z
+      .string()
+      .optional()
+      .describe('Sort order — e.g. CREATED_DESC (default on server), CREATED_ASC, UPDATED_DESC, UPDATED_ASC.'),
     first: z.number().min(1).max(100).default(20).describe('Number of todos to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
     fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
@@ -1873,6 +1885,9 @@ const listMyTodosTool: Tool = {
         type: input.type,
         groupPath,
         projectPath,
+        authorIds: input.authorIds,
+        isSnoozed: input.isSnoozed,
+        sort: input.sort,
         first: input.first,
         after: input.after,
         fetchAll: input.fetchAll,
@@ -1906,14 +1921,57 @@ const markAllTodosDoneTool: Tool = {
   name: 'mark_all_todos_done',
   title: 'Mark All Todos Done',
   description:
-    'Mark every pending to-do item as done for the authenticated user. Irreversible without per-item restore_todo calls. Idempotent — succeeds even if there are zero pending todos.',
+    'Mark pending to-do items as done for the authenticated user. With no arguments, marks every pending todo. Optional scoping args (groupPath, projectPath, action, type, authorIds, targetId) narrow which todos are marked. Irreversible without per-item restore_todo calls. Returns the actual list of updated todos.',
   requiresAuth: false,
   requiresWrite: true,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
-  inputSchema: withUserAuth(z.object({})),
+  inputSchema: withUserAuth(z.object({
+    groupPath: z
+      .string()
+      .optional()
+      .describe('Limit to a group by full path. Resolved to a node GID server-side.'),
+    projectPath: z
+      .string()
+      .optional()
+      .describe('Limit to a project by full path. Resolved to a node GID server-side.'),
+    action: z
+      .string()
+      .optional()
+      .describe('Limit to todos with this action (e.g. assigned, mentioned, review_requested).'),
+    type: z
+      .string()
+      .optional()
+      .describe('Limit to todos targeting this type (e.g. Issue, MergeRequest, Epic).'),
+    authorIds: z
+      .array(z.string().min(1))
+      .optional()
+      .describe('Limit to todos authored by these users. Numeric IDs or gid://gitlab/User/N strings.'),
+    targetId: z
+      .string()
+      .optional()
+      .describe('Limit to todos for a single target (e.g. a specific issue/MR GID).'),
+  })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    return client.markAllTodosDone(credentials);
+    const groupPath = input.groupPath?.trim();
+    const projectPath = input.projectPath?.trim();
+    if (input.groupPath !== undefined && !groupPath) {
+      throw new Error('groupPath cannot be empty or whitespace');
+    }
+    if (input.projectPath !== undefined && !projectPath) {
+      throw new Error('projectPath cannot be empty or whitespace');
+    }
+    return client.markAllTodosDone(
+      {
+        groupPath,
+        projectPath,
+        action: input.action,
+        type: input.type,
+        authorIds: input.authorIds,
+        targetId: input.targetId,
+      },
+      credentials,
+    );
   },
 };
 

@@ -1,7 +1,7 @@
 {
   "name": "gitlab-mcp",
   "description": "GitLab MCP server with GraphQL discovery and team activity tools",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "icon": "assets/logo.svg",
   "author": {
     "name": "Tim Pearson"
