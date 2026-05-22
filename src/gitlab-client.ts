@@ -2889,7 +2889,7 @@ export class GitLabGraphQLClient {
   ): Promise<{ todos: Array<{ id: string; state: string }>; errors: string[] }> {
     const input: Record<string, any> = {};
     if (params.targetId) {
-      input.targetId = params.targetId.startsWith('gid://') ? params.targetId : params.targetId;
+      input.targetId = params.targetId;
     }
     if (params.authorIds && params.authorIds.length > 0) {
       input.authorId = params.authorIds.map(id =>
@@ -2993,7 +2993,7 @@ export class GitLabGraphQLClient {
    * (e.g., broadcast messages).
    */
   private async restRequest<T = any>(
-    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     options: { body?: any; query?: Record<string, any>; userConfig?: UserConfig; requiresWrite?: boolean } = {}
   ): Promise<T> {
@@ -3046,6 +3046,62 @@ export class GitLabGraphQLClient {
         clearTimeout(timeoutId);
       }
     }, `REST ${method} ${path}`);
+  }
+
+  /**
+   * Validate a REST path supplied by an MCP tool caller. Must be an absolute
+   * `/api/v4` sub-path; we reject schemes, query strings, and `..` segments
+   * so the caller can't escape the configured GitLab base URL.
+   */
+  private validateRestPath(path: string): string {
+    const trimmed = path.trim();
+    if (!trimmed.startsWith('/')) {
+      throw new Error(`REST path must start with "/" (got: ${trimmed})`);
+    }
+    if (trimmed.includes('://')) {
+      throw new Error('REST path must be a path under /api/v4, not a full URL');
+    }
+    if (trimmed.includes('?')) {
+      throw new Error('REST path must not include a query string — use the query parameter instead');
+    }
+    if (trimmed.split('/').some(seg => seg === '..')) {
+      throw new Error('REST path must not contain ".." segments');
+    }
+    return trimmed;
+  }
+
+  /**
+   * Execute an arbitrary `GET /api/v4` request. Open-ended escape hatch for
+   * REST endpoints not covered by a dedicated tool. Reads only — uses the
+   * standard read-or-write token resolution (per-call > GITLAB_TOKEN >
+   * GITLAB_READ_TOKEN).
+   */
+  async executeRestRead<T = any>(
+    path: string,
+    query?: Record<string, any>,
+    userConfig?: UserConfig,
+  ): Promise<T> {
+    return this.restRequest<T>('GET', this.validateRestPath(path), { query, userConfig });
+  }
+
+  /**
+   * Execute an arbitrary write request (`POST` / `PUT` / `PATCH` / `DELETE`)
+   * against `/api/v4`. Open-ended escape hatch for write endpoints not
+   * covered by a dedicated tool. Requires write capability — the four-step
+   * token resolution rejects GITLAB_READ_TOKEN-only setups.
+   */
+  async executeRestWrite<T = any>(
+    method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+    path: string,
+    options: { body?: any; query?: Record<string, any> } = {},
+    userConfig?: UserConfig,
+  ): Promise<T> {
+    return this.restRequest<T>(method, this.validateRestPath(path), {
+      body: options.body,
+      query: options.query,
+      userConfig,
+      requiresWrite: true,
+    });
   }
 
   async listBroadcastMessages(page = 1, perPage = 20, userConfig?: UserConfig): Promise<any> {

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-05-21
+
+### Added
+- `execute_rest_read` and `execute_rest_write` tools — open-ended REST API escape hatches matching the existing `execute_custom_query` for GraphQL. Lets agents reach any `/api/v4` endpoint not covered by a dedicated tool (admin endpoints, repo files, pipeline test reports, etc.) instead of waiting for a curated tool PR. Split into two so the read variant is `readOnlyHint: true` / `requiresWrite: false` and the write variant is `requiresWrite: true` / `destructiveHint: true` — mirrors the GITLAB_TOKEN / GITLAB_READ_TOKEN separation and lets the MCP harness gate destructive calls. Path is validated to be `/api/v4`-relative (no host, no query string, no `..` traversal) before the request runs.
+- `restRequest` now accepts `PATCH` in addition to `GET` / `POST` / `PUT` / `DELETE` — some GitLab REST endpoints (e.g. certain MR approval-rule routes) use PATCH.
+
+### Changed
+- Removed a no-op `startsWith('gid://')` ternary in `markAllTodosDone` that resolved to `params.targetId` in both branches. Functionally identical; just cleaner.
+
 ## [1.18.1] - 2026-05-21
 
 ### Fixed

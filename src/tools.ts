@@ -277,6 +277,61 @@ const executeCustomQueryTool: Tool = {
   },
 };
 
+const executeRestReadTool: Tool = {
+  name: 'execute_rest_read',
+  title: 'Custom REST Read',
+  description:
+    'Execute an arbitrary GET request against the GitLab REST API at /api/v4. Open-ended escape hatch for read endpoints not covered by a dedicated tool — e.g. /projects/:id/repository/files, /projects/:id/pipelines/:pipeline_id/test_report, /admin/*. Provide the path beginning with "/" (no host, no /api/v4 prefix) and an optional query object. For writes, use execute_rest_write.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    path: z
+      .string()
+      .min(1)
+      .describe('Path under /api/v4, beginning with "/" (e.g. "/projects/42/issues" or "/projects/foo%2Fbar/repository/commits/HEAD"). Must not include host, "/api/v4" prefix, or "?" query string.'),
+    query: z
+      .record(z.union([z.string(), z.number(), z.boolean()]))
+      .optional()
+      .describe('Query string parameters (e.g. { state: "opened", per_page: 20 }). Values are coerced to strings.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.executeRestRead(input.path, input.query, credentials);
+  },
+};
+
+const executeRestWriteTool: Tool = {
+  name: 'execute_rest_write',
+  title: 'Custom REST Write',
+  description:
+    'Execute an arbitrary POST/PUT/PATCH/DELETE request against the GitLab REST API at /api/v4. Open-ended escape hatch for write endpoints not covered by a dedicated tool. Destructive — DELETE is permitted, so check the path before invoking. For reads, use execute_rest_read.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  inputSchema: withUserAuth(z.object({
+    method: z
+      .enum(['POST', 'PUT', 'PATCH', 'DELETE'])
+      .describe('HTTP method. DELETE is destructive and not reversible.'),
+    path: z
+      .string()
+      .min(1)
+      .describe('Path under /api/v4, beginning with "/" (e.g. "/projects/42/issues" or "/projects/foo%2Fbar/merge_requests/3/merge"). Must not include host, "/api/v4" prefix, or "?" query string.'),
+    body: z
+      .any()
+      .optional()
+      .describe('Request body — JSON-serialized as application/json. Omit for endpoints that don\'t take a body (most DELETE / some PUT).'),
+    query: z
+      .record(z.union([z.string(), z.number(), z.boolean()]))
+      .optional()
+      .describe('Query string parameters. Most write endpoints take their args in the body, but a few mix.'),
+  })),
+  handler: async (input, client, userConfig) => {
+    const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+    return client.executeRestWrite(input.method, input.path, { body: input.body, query: input.query }, credentials);
+  },
+};
+
 const getAvailableQueriesTools: Tool = {
   name: 'get_available_queries',
   title: 'Available Queries',
@@ -2406,6 +2461,7 @@ export const readOnlyTools: Tool[] = [
   getIssuesTool,
   getMergeRequestsTool,
   executeCustomQueryTool,
+  executeRestReadTool,
   getAvailableQueriesTools,
   getMergeRequestPipelinesTool,
   getPipelineJobsTool,
@@ -2437,6 +2493,7 @@ export const userAuthTools: Tool[] = [
 ];
 
 export const writeTools: Tool[] = [
+  executeRestWriteTool,
   createIssueTool,
   createMergeRequestTool,
   createNoteTool,
