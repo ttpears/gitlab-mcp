@@ -115,7 +115,7 @@ const getProjectsTool: Tool = {
   inputSchema: withUserAuth(z.object({
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
     after: z.string().optional().describe('Cursor for pagination'),
-    sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
+    sort: z.string().optional().describe('GitLab project sort string (e.g., latest_activity_desc, created_desc, name_asc, stars_desc). Defaults to latest_activity_desc for recency.'),
     fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
   })),
   handler: async (input, client, userConfig) => {
@@ -269,11 +269,11 @@ const executeCustomQueryTool: Tool = {
   inputSchema: withUserAuth(z.object({
     query: z.string().describe('GraphQL query string. Example: query { issues(assigneeUsernames: ["cdhanlon"], state: opened, first: 50) { nodes { iid title webUrl } } }'),
     variables: z.record(z.any()).optional().describe('Variables for the GraphQL query'),
-    requiresWrite: z.boolean().default(false).describe('Set to true if this is a mutation that requires write permissions'),
+    requiresWrite: z.boolean().default(false).describe('Hint that this needs write access. Mutations are auto-detected and always write-gated regardless of this flag.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    return await client.query(input.query, input.variables, credentials, input.requiresWrite);
+    return await client.executeCustomQuery(input.query, input.variables, credentials, input.requiresWrite);
   },
 };
 

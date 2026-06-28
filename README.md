@@ -158,7 +158,7 @@ mcpServers:
     timeout: 120000
     headers:
       Authorization: "Bearer {{GITLAB_PAT}}"
-      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"   # optional; lets a user point at a different GitLab
+      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"   # only honored when GITLAB_PIN_HOST=false (default pins to GITLAB_URL)
     customUserVars:
       GITLAB_PAT:
         title: "GitLab Personal Access Token"
@@ -256,6 +256,51 @@ The `Authorization` and `Mcp-Session-Id` headers must pass through unchanged. Mo
 
 ---
 
+## OAuth for remote users
+
+For a publicly hosted instance where each user signs in with **their own GitLab
+identity** — and modern MCP clients (Claude.ai, Claude Code) connect with **no
+manual token setup** — enable brokered OAuth 2.1. The server then acts as its own
+OAuth Authorization Server in front of GitLab:
+
+- advertises Protected Resource Metadata (RFC 9728) and Authorization Server
+  Metadata (RFC 8414) at the standard `.well-known` endpoints,
+- supports Dynamic Client Registration (RFC 7591), so clients self-register,
+- runs authorization-code + PKCE against both the MCP client **and** GitLab
+  (dual-PKCE) behind **one** fixed GitLab callback,
+- gates the MCP endpoints with bearer validation — unauthenticated requests get
+  `401` + `WWW-Authenticate` pointing at the resource metadata (the discovery trigger),
+- mints its own opaque tokens and keeps each user's GitLab token server-side
+  (no token passthrough).
+
+**Setup**
+
+1. Register **one** GitLab application (instance/group/user → **Applications**):
+   - Redirect URI: `https://<your-host>/gitlab/callback`
+   - Scopes: `api` (read + write) or `read_api`
+   - Confidential: yes (recommended) → you get a client secret; or mark it public for PKCE-only.
+2. Run the server (HTTP mode) with **no** `GITLAB_TOKEN` — identity comes from each user's OAuth login:
+
+   ```bash
+   MCP_TRANSPORT=http GITLAB_MCP_PORT=8008 \
+   GITLAB_URL=https://gitlab.example.com \
+   GITLAB_MCP_OAUTH=true \
+   MCP_SERVER_URL=https://gitlab-mcp.example.com \
+   GITLAB_OAUTH_CLIENT_ID=<application id> \
+   GITLAB_OAUTH_CLIENT_SECRET=<application secret> \
+   GITLAB_OAUTH_SCOPES=api \
+   npx -y @ttpears/gitlab-mcp-server
+   ```
+
+3. Point an MCP client at `https://gitlab-mcp.example.com/` — it discovers the
+   metadata, registers, and walks the user through GitLab sign-in automatically.
+
+`MCP_SERVER_URL` must be HTTPS (terminate TLS at your reverse proxy) and must
+match the host the GitLab redirect URI is registered under. Token/registration
+state is in-memory, so run a single instance (or add a shared store) per issuer.
+
+---
+
 ## How this differs from GitLab's official MCP server
 
 GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/) (Beta) that requires **Premium/Ultimate** and **GitLab Duo**.
@@ -264,9 +309,9 @@ GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/mo
 |---|---|---|
 | **GitLab tier** | Free, Premium, Ultimate | Premium / Ultimate only |
 | **GitLab Duo required** | No | Yes |
-| **Auth** | Personal Access Token | OAuth 2.0 Dynamic Client Registration |
+| **Auth** | PAT, or brokered OAuth 2.1 + Dynamic Client Registration | OAuth 2.0 Dynamic Client Registration |
 | **Transport** | stdio + streamable HTTP | stdio + HTTP |
-| **Multi-user** | Per-call PAT or service-account fallback | OAuth per-user |
+| **Multi-user** | Per-call PAT, OAuth per-user, or service-account fallback | OAuth per-user |
 | **GraphQL schema discovery** | Yes — introspect & run custom queries | No |
 | **Repository browsing & file reading** | Yes | No |
 | **Update issues / MRs / notes** | Yes | No (create only) |
@@ -280,9 +325,9 @@ GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/mo
 | **Group member listing** | Yes | No |
 | **Semantic code search** | No | Yes (requires additional setup) |
 
-**Choose this server** for Free/CE, GraphQL flexibility, or LibreChat
-multi-user. **Choose the official server** for Premium+Duo with semantic
-code search, or if you prefer OAuth.
+**Choose this server** for Free/CE, GraphQL flexibility, LibreChat multi-user,
+or brokered OAuth without GitLab Duo. **Choose the official server** for
+Premium+Duo with semantic code search.
 
 ---
 
@@ -362,10 +407,18 @@ code search, or if you prefer OAuth.
 | `GITLAB_URL` | GitLab instance URL | `https://gitlab.com` |
 | `GITLAB_TOKEN` | Full-access fallback token (reads + writes) | — |
 | `GITLAB_READ_TOKEN` | Read-only fallback token (writes always rejected) | — |
+| `GITLAB_PIN_HOST` | Force every request to `GITLAB_URL`, ignoring per-call/header `gitlabUrl` (SSRF guard). Set `false` to serve multiple instances | `true` |
+| `GITLAB_ALLOW_SHARED_ESCAPE_HATCH` | Allow `execute_custom_query` / `execute_rest_read` / `execute_rest_write` to run on the shared token (otherwise they require per-call credentials) | `false` |
 | `GITLAB_MAX_PAGE_SIZE` | Maximum items per page (1–100) | `50` |
 | `GITLAB_TIMEOUT` | Request timeout in milliseconds | `30000` |
 | `GITLAB_MCP_PORT` | HTTP server port | `8008` |
 | `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | `stdio` |
+| `GITLAB_MCP_OAUTH` | Enable brokered OAuth 2.1 (HTTP mode) — see [OAuth for remote users](#oauth-for-remote-users) | `false` |
+| `MCP_SERVER_URL` | Public HTTPS URL of this server (OAuth issuer/resource id) — required when OAuth is on | — |
+| `GITLAB_OAUTH_CLIENT_ID` | GitLab application id — required when OAuth is on | — |
+| `GITLAB_OAUTH_CLIENT_SECRET` | GitLab application secret (omit for a public/PKCE-only app) | — |
+| `GITLAB_OAUTH_SCOPES` | Space-separated GitLab scopes to request | `api` |
+| `GITLAB_OAUTH_CALLBACK_PATH` | Path of the fixed GitLab redirect URI | `/gitlab/callback` |
 
 `GITLAB_TOKEN` and `GITLAB_READ_TOKEN` are **mutually exclusive**; setting both is a startup error.
 

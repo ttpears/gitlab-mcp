@@ -3,9 +3,8 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import * as http from 'http';
 import { randomUUID } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { realpathSync, readFileSync } from 'node:fs';
 import { URL, fileURLToPath } from 'url';
 import express from 'express';
 import { zodToJsonSchema } from 'zod-to-json-schema';
@@ -22,10 +21,26 @@ import {
   GetPromptRequestSchema,
   ErrorCode,
   McpError,
+  LATEST_PROTOCOL_VERSION,
 } from '@modelcontextprotocol/sdk/types.js';
+import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { loadConfig } from './config.js';
 import { GitLabGraphQLClient } from './gitlab-client.js';
 import { tools } from './tools.js';
+import { GitLabOAuthProvider, buildOAuthOptions } from './oauth.js';
+
+// Single source of truth for the server version: read package.json at runtime so
+// it never drifts from the published package. Resolves to the repo root in both
+// dev (src/index.ts) and build (dist/index.js) layouts.
+const SERVER_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
 
 class GitLabMCPServer {
   private server: Server | null = null; // Used only for stdio mode
@@ -37,6 +52,7 @@ class GitLabMCPServer {
     lastActivity: number;
   }> = new Map();
   private sessionCleanupInterval?: NodeJS.Timeout;
+  private oauthProvider?: GitLabOAuthProvider;
 
   constructor() {
     // Initialize GitLab client using environment configuration
@@ -65,7 +81,7 @@ class GitLabMCPServer {
     const server = new Server(
       {
         name: 'GitLab',
-        version: '1.14.0',
+        version: SERVER_VERSION,
       },
       {
         capabilities: {
@@ -111,10 +127,22 @@ class GitLabMCPServer {
       try {
         const validatedInput = tool.inputSchema.parse(args || {});
 
-        // Extract user credentials: prioritize args, fallback to session-specific config
+        // Extract user credentials: prioritize args, then OAuth identity, then
+        // session-specific config.
         let userConfig = validatedInput.userCredentials;
 
-        // If no credentials in args, try to get from session context.
+        // OAuth mode: requireBearerAuth validated the MCP bearer and the broker
+        // stashed the per-user GitLab token in authInfo.extra. The StreamableHTTP
+        // transport surfaces it as extra.authInfo. This is the spec-correct path —
+        // the GitLab token never leaves the server as a client-visible credential.
+        if (!userConfig) {
+          const gitlabToken = (extra?.authInfo?.extra as { gitlabToken?: string } | undefined)?.gitlabToken;
+          if (gitlabToken) {
+            userConfig = { accessToken: gitlabToken };
+          }
+        }
+
+        // If no credentials yet, try to get from session context.
         // The MCP SDK exposes the transport session id at extra.sessionId
         // (top-level), not under extra._meta — see RequestHandlerExtra in
         // @modelcontextprotocol/sdk/shared/protocol.d.ts.
@@ -265,6 +293,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
       if (this.sessionCleanupInterval) {
         clearInterval(this.sessionCleanupInterval);
       }
+      this.oauthProvider?.dispose();
       // Close all HTTP sessions
       for (const [sessionId, data] of this.httpSessions.entries()) {
         try {
@@ -319,6 +348,12 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
    * Extract and validate user credentials from request headers
    */
   private extractUserCredentials(req: express.Request): { accessToken: string; gitlabUrl?: string } | undefined {
+    // In OAuth mode the Authorization header carries our MCP bearer token, not a
+    // GitLab PAT — the GitLab identity is resolved by requireBearerAuth and flows
+    // through authInfo, so never treat the header as a raw GitLab credential here.
+    if (this.oauthProvider) {
+      return undefined;
+    }
     const authHeader = (req.headers['authorization'] as string) || '';
     const gitlabUrlHeader = (req.headers['x-gitlab-url'] as string) || undefined;
 
@@ -342,10 +377,6 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
    */
   private async handleStreamableHTTP(req: express.Request, res: express.Response): Promise<void> {
     try {
-      // Debug logging to understand what's happening
-      const hasBody = req.body && Object.keys(req.body).length > 0;
-      const bodyPreview = hasBody ? JSON.stringify(req.body).substring(0, 100) : 'empty';
-
       // Validate Accept header per MCP spec
       const acceptHeader = req.headers['accept'] || '';
       const supportsJson = acceptHeader.includes('application/json');
@@ -367,7 +398,9 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
       const sessionIdHeader = (req.headers['mcp-session-id'] as string) ||
                              (req.headers['Mcp-Session-Id'] as string) || '';
 
-      console.error(`[MCP] Request: ${req.method} session=${sessionIdHeader || 'none'} body=${bodyPreview}`);
+      if (process.env.NODE_ENV === 'development') {
+        console.error(`[MCP] Request: ${req.method} session=${sessionIdHeader || 'none'}`);
+      }
 
       if (sessionIdHeader && this.httpSessions.has(sessionIdHeader)) {
         // Existing session: reuse transport and update credentials
@@ -520,7 +553,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
           res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID, Cache-Control');
           res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version');
-          res.header('MCP-Protocol-Version', '2025-11-25');
+          res.header('MCP-Protocol-Version', LATEST_PROTOCOL_VERSION);
 
           // Disable buffering for SSE streams
           if (req.headers.accept?.includes('text/event-stream')) {
@@ -536,48 +569,57 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           next();
         });
 
+        // OAuth 2.1 brokered auth (optional). When GITLAB_MCP_OAUTH is enabled the
+        // server becomes its own Authorization Server in front of GitLab: it
+        // advertises protected-resource + AS metadata, supports Dynamic Client
+        // Registration, and gates the MCP endpoints behind a validated bearer token.
+        const mcpGuards: express.RequestHandler[] = [];
+        if (process.env.GITLAB_MCP_OAUTH && /^(1|true|yes|on)$/i.test(process.env.GITLAB_MCP_OAUTH)) {
+          const oauthOptions = buildOAuthOptions({
+            gitlabUrl: config.gitlabUrl,
+            serverUrl: process.env.MCP_SERVER_URL,
+            clientId: process.env.GITLAB_OAUTH_CLIENT_ID,
+            clientSecret: process.env.GITLAB_OAUTH_CLIENT_SECRET,
+            scopes: process.env.GITLAB_OAUTH_SCOPES,
+            callbackPath: process.env.GITLAB_OAUTH_CALLBACK_PATH,
+            timeoutMs: config.defaultTimeout,
+          });
+          this.oauthProvider = new GitLabOAuthProvider(oauthOptions);
+          const issuerUrl = new URL(oauthOptions.serverUrl);
+
+          // Standard AS endpoints: /authorize, /token, /register, /revoke, and the
+          // .well-known metadata documents. Must be mounted at the app root.
+          app.use(
+            mcpAuthRouter({
+              provider: this.oauthProvider,
+              issuerUrl,
+              scopesSupported: oauthOptions.scopes.split(/[\s,]+/).filter(Boolean),
+              resourceName: 'GitLab MCP Server',
+            })
+          );
+
+          // Fixed GitLab callback (the only redirect URI registered in GitLab).
+          app.get(oauthOptions.callbackPath, (req, res) => this.oauthProvider!.handleGitLabCallback(req, res));
+
+          // Gate the MCP endpoints; 401s carry WWW-Authenticate → resource metadata.
+          mcpGuards.push(
+            requireBearerAuth({
+              verifier: this.oauthProvider,
+              resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(issuerUrl),
+            })
+          );
+          console.error(`[MCP] OAuth enabled — issuer ${oauthOptions.serverUrl}, GitLab callback ${oauthOptions.callbackPath}`);
+        }
+
         // Streamable HTTP endpoint at root (primary transport)
-        app.all('/', (req, res) => this.handleStreamableHTTP(req, res));
+        app.all('/', ...mcpGuards, (req, res) => this.handleStreamableHTTP(req, res));
 
         // Alternative /mcp endpoint for container compatibility
-        app.all('/mcp', (req, res) => this.handleStreamableHTTP(req, res));
+        app.all('/mcp', ...mcpGuards, (req, res) => this.handleStreamableHTTP(req, res));
 
-        // DELETE support for explicit session termination (per MCP spec)
-        app.delete('/', async (req, res) => {
-          const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
-          if (sessionIdHeader && this.httpSessions.has(sessionIdHeader)) {
-            const sessionData = this.httpSessions.get(sessionIdHeader)!;
-            await sessionData.server.close();
-            await sessionData.transport.close();
-            this.httpSessions.delete(sessionIdHeader);
-            console.error(`[MCP] Session ${sessionIdHeader} terminated by client`);
-            res.sendStatus(200);
-          } else {
-            res.status(404).json({
-              jsonrpc: '2.0',
-              error: { code: -32001, message: 'Session not found' },
-              id: null,
-            });
-          }
-        });
-
-        app.delete('/mcp', async (req, res) => {
-          const sessionIdHeader = (req.headers['mcp-session-id'] as string) || '';
-          if (sessionIdHeader && this.httpSessions.has(sessionIdHeader)) {
-            const sessionData = this.httpSessions.get(sessionIdHeader)!;
-            await sessionData.server.close();
-            await sessionData.transport.close();
-            this.httpSessions.delete(sessionIdHeader);
-            console.error(`[MCP] Session ${sessionIdHeader} terminated by client`);
-            res.sendStatus(200);
-          } else {
-            res.status(404).json({
-              jsonrpc: '2.0',
-              error: { code: -32001, message: 'Session not found' },
-              id: null,
-            });
-          }
-        });
+        // DELETE (explicit session termination, per MCP spec) is matched by the
+        // app.all('/') and app.all('/mcp') routes below and handled by the
+        // StreamableHTTP transport — behind the same bearer guard as POST/GET.
 
         // Health check endpoint
         app.get('/health', (req, res) => {
@@ -585,7 +627,8 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
             status: 'healthy',
             timestamp: new Date().toISOString(),
             sessions: this.httpSessions.size,
-            protocol: '2025-11-25'
+            version: SERVER_VERSION,
+            protocol: LATEST_PROTOCOL_VERSION
           });
         });
 
@@ -597,7 +640,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
           console.error(`Streamable HTTP: http://localhost:${port}/ (recommended)`);
           console.error(`Alternative: http://localhost:${port}/mcp`);
           console.error(`Health check: http://localhost:${port}/health`);
-          console.error(`Protocol: MCP 2025-11-25`);
+          console.error(`Protocol: MCP ${LATEST_PROTOCOL_VERSION}`);
           console.error('');
           console.error('Configuration:');
           const httpConfig = loadConfig();
@@ -623,7 +666,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
         console.error('GitLab MCP Server - stdio Mode');
         console.error('='.repeat(60));
         console.error('Transport: stdio (for Claude Desktop, Claude Code, VS Code)');
-        console.error(`Protocol: MCP 2025-11-25`);
+        console.error(`Protocol: MCP ${LATEST_PROTOCOL_VERSION}`);
         console.error('');
         console.error('Configuration:');
         console.error(`  GitLab URL: ${config.gitlabUrl}`);
