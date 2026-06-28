@@ -608,6 +608,7 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
             clientSecret: process.env.GITLAB_OAUTH_CLIENT_SECRET,
             scopes: process.env.GITLAB_OAUTH_SCOPES,
             callbackPath: process.env.GITLAB_OAUTH_CALLBACK_PATH,
+            allowedGroups: process.env.GITLAB_OAUTH_ALLOWED_GROUPS,
             timeoutMs: config.defaultTimeout,
           });
           this.oauthProvider = new GitLabOAuthProvider(oauthOptions);

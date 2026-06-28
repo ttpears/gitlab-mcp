@@ -55,6 +55,12 @@ export interface GitLabOAuthOptions {
   callbackPath: string;
   /** Request timeout for GitLab token calls, ms */
   timeoutMs: number;
+  /**
+   * Optional access allow-list: GitLab group full-paths whose members may use
+   * this connector (a member of a group is allowed for that group and all its
+   * subgroups). Empty = open to any authenticated GitLab user.
+   */
+  allowedGroups: string[];
 }
 
 interface PendingAuth {
@@ -231,6 +237,30 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
     } catch (err) {
       res.status(502).type('text/plain').send(`Failed to exchange code with GitLab: ${(err as Error).message}`);
       return;
+    }
+
+    // Access allow-list: reject users who aren't a member of any configured group
+    // before we mint anything. Return the OAuth error to the client's redirect URI
+    // (access_denied) so the MCP client surfaces a proper "not authorized" message.
+    if (this.opts.allowedGroups.length > 0) {
+      let allowed: boolean;
+      try {
+        allowed = await this.userIsInAllowedGroup(tokens.access_token);
+      } catch (err) {
+        res.status(502).type('text/plain').send(`Failed to verify group membership: ${(err as Error).message}`);
+        return;
+      }
+      if (!allowed) {
+        const denied = new URL(pending.clientRedirectUri);
+        denied.searchParams.set('error', 'access_denied');
+        denied.searchParams.set(
+          'error_description',
+          'Your GitLab account is not a member of a group permitted to use this connector.'
+        );
+        if (pending.clientState) denied.searchParams.set('state', pending.clientState);
+        res.redirect(denied.toString());
+        return;
+      }
     }
 
     const mcpCode = randomToken();
@@ -428,6 +458,49 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
     }
   }
 
+  /**
+   * Is the GitLab user (identified by their freshly-issued token) a member of any
+   * configured allowed group, or a subgroup thereof? Pages through the user's
+   * member groups and matches each allowed full-path as an exact or ancestor path
+   * (so allowing "team" admits members of "team/backend"). Case-insensitive.
+   */
+  private async userIsInAllowedGroup(gitlabAccessToken: string): Promise<boolean> {
+    const allowed = this.opts.allowedGroups.map((g) => g.toLowerCase().replace(/^\/+|\/+$/g, ''));
+    if (allowed.length === 0) return true;
+    // Up to 10 pages × 100 = 1000 groups; min_access_level=10 (Guest) = any membership.
+    for (let page = 1; page <= 10; page++) {
+      const resp = await this.gitlabApiGet(
+        `/groups?min_access_level=10&per_page=100&page=${page}`,
+        gitlabAccessToken
+      );
+      if (!resp.ok) {
+        throw new Error(`GitLab group membership lookup returned ${resp.status}`);
+      }
+      const groups = (await resp.json()) as Array<{ full_path?: string }>;
+      for (const g of groups) {
+        const fp = (g.full_path || '').toLowerCase();
+        if (!fp) continue;
+        if (allowed.some((a) => fp === a || fp.startsWith(a + '/'))) return true;
+      }
+      if (groups.length < 100) break; // last page reached
+    }
+    return false;
+  }
+
+  /** Authenticated GET against the GitLab REST API as the user, with timeout. */
+  private async gitlabApiGet(path: string, gitlabAccessToken: string) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.opts.timeoutMs);
+    try {
+      return await fetch(`${this.opts.gitlabBaseUrl.replace(/\/$/, '')}/api/v4${path}`, {
+        headers: { Authorization: `Bearer ${gitlabAccessToken}`, Accept: 'application/json' },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
   private purgeExpired(): void {
     const now = Date.now();
     for (const [k, v] of this.pending) if (v.expiresAt < now) this.pending.delete(k);
@@ -448,6 +521,7 @@ export function buildOAuthOptions(input: {
   clientSecret?: string;
   scopes?: string;
   callbackPath?: string;
+  allowedGroups?: string;
   timeoutMs: number;
 }): GitLabOAuthOptions {
   const missing: string[] = [];
@@ -475,6 +549,7 @@ export function buildOAuthOptions(input: {
     clientSecret: input.clientSecret || undefined,
     scopes: input.scopes && input.scopes.trim() ? input.scopes.trim() : 'api',
     callbackPath: input.callbackPath && input.callbackPath.startsWith('/') ? input.callbackPath : '/gitlab/callback',
+    allowedGroups: (input.allowedGroups || '').split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
     timeoutMs: input.timeoutMs,
   };
 }

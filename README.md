@@ -420,6 +420,7 @@ Premium+Duo with semantic code search.
 | `GITLAB_OAUTH_CLIENT_SECRET` | GitLab application secret (omit for a public/PKCE-only app) | — |
 | `GITLAB_OAUTH_SCOPES` | Space-separated GitLab scopes to request | `api` |
 | `GITLAB_OAUTH_CALLBACK_PATH` | Path of the fixed GitLab redirect URI | `/gitlab/callback` |
+| `GITLAB_OAUTH_ALLOWED_GROUPS` | Restrict the connector to members of these GitLab groups (comma/space separated full-paths; subgroups included). Empty = any authenticated user | unset |
 
 `GITLAB_TOKEN` and `GITLAB_READ_TOKEN` are **mutually exclusive**; setting both is a startup error.
 

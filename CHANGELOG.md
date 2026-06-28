@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `GITLAB_OAUTH_ALLOWED_GROUPS` — restrict the brokered OAuth connector to members of the named GitLab groups (and their subgroups). The broker checks the authenticated user's group membership after GitLab login and returns `access_denied` to the client if they aren't a member of any allowed group. Empty/unset = any authenticated GitLab user (unchanged default).
+
 ## [2.0.1] - 2026-06-27
 
 ### Added

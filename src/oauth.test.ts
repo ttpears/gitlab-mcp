@@ -10,6 +10,7 @@ function opts(over: Partial<GitLabOAuthOptions> = {}): GitLabOAuthOptions {
     clientSecret: 'app-secret',
     scopes: 'api',
     callbackPath: '/gitlab/callback',
+    allowedGroups: [],
     timeoutMs: 5000,
     ...over,
   };
@@ -100,6 +101,80 @@ describe('GitLabOAuthProvider — verifyAccessToken', () => {
     const p = new GitLabOAuthProvider(opts());
     await expect(p.verifyAccessToken('bogus')).rejects.toThrow(/Unknown or revoked/);
     p.dispose();
+  });
+});
+
+describe('buildOAuthOptions — allowedGroups parsing', () => {
+  it('splits a comma/space list, defaults to empty', () => {
+    const base = { gitlabUrl: 'https://g', serverUrl: 'https://m', clientId: 'x', timeoutMs: 1000 };
+    expect(buildOAuthOptions(base).allowedGroups).toEqual([]);
+    expect(buildOAuthOptions({ ...base, allowedGroups: 'team-a, team-b  team-c' }).allowedGroups).toEqual([
+      'team-a',
+      'team-b',
+      'team-c',
+    ]);
+  });
+});
+
+describe('GitLabOAuthProvider — group allow-list', () => {
+  const realFetch = global.fetch;
+  afterEach(() => {
+    global.fetch = realFetch;
+  });
+
+  // Routes fetch by URL: GitLab token endpoint vs. the groups membership lookup.
+  function mockGitLab(userGroups: Array<{ full_path: string }>) {
+    global.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.includes('/oauth/token')) {
+        return new Response(JSON.stringify({ access_token: 'glpat-user', expires_in: 7200 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (u.includes('/api/v4/groups')) {
+        return new Response(JSON.stringify(userGroups), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      throw new Error(`unexpected fetch ${u}`);
+    }) as typeof fetch;
+  }
+
+  async function runCallback(allowedGroups: string[], userGroups: Array<{ full_path: string }>) {
+    const p = new GitLabOAuthProvider(opts({ allowedGroups }));
+    p.clientsStore.registerClient!(client);
+    const res = fakeRes();
+    await p.authorize(
+      client,
+      { redirectUri: 'https://app.test/cb', codeChallenge: 'cc', state: 'st', scopes: ['api'] },
+      res as any
+    );
+    const brokerState = new URL(res.redirectedTo!).searchParams.get('state')!;
+    mockGitLab(userGroups);
+    const cbRes = fakeRes();
+    await p.handleGitLabCallback({ query: { code: 'glc', state: brokerState } } as any, cbRes as any);
+    p.dispose();
+    return new URL(cbRes.redirectedTo!);
+  }
+
+  it('denies a user who is not in any allowed group', async () => {
+    const redirect = await runCallback(['team'], [{ full_path: 'other-org/widgets' }]);
+    expect(redirect.searchParams.get('error')).toBe('access_denied');
+    expect(redirect.searchParams.get('code')).toBeNull();
+    expect(redirect.searchParams.get('state')).toBe('st');
+  });
+
+  it('admits a member of a subgroup of an allowed group', async () => {
+    const redirect = await runCallback(['team'], [{ full_path: 'team/backend' }]);
+    expect(redirect.searchParams.get('code')).toBeTruthy();
+    expect(redirect.searchParams.get('error')).toBeNull();
+  });
+
+  it('admits an exact group match (case-insensitive)', async () => {
+    const redirect = await runCallback(['Team-A'], [{ full_path: 'team-a' }]);
+    expect(redirect.searchParams.get('code')).toBeTruthy();
   });
 });
 
