@@ -42,6 +42,21 @@ const SERVER_VERSION: string = (() => {
   }
 })();
 
+/**
+ * Parse the TRUST_PROXY env var into an Express `trust proxy` value.
+ * Returns undefined (don't trust) when unset/empty. Recognizes booleans, a hop
+ * count, and otherwise passes the string through (Express accepts IP/subnet lists).
+ */
+export function parseTrustProxy(value: string | undefined): boolean | number | string | undefined {
+  if (value === undefined || value.trim() === '') return undefined;
+  const v = value.trim();
+  const lower = v.toLowerCase();
+  if (['true', 'yes', 'on'].includes(lower)) return true;
+  if (['false', 'no', 'off'].includes(lower)) return false;
+  if (/^\d+$/.test(v)) return Number(v);
+  return v;
+}
+
 class GitLabMCPServer {
   private server: Server | null = null; // Used only for stdio mode
   private gitlabClient!: GitLabGraphQLClient;
@@ -536,6 +551,17 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
 
         // Disable X-Powered-By header
         app.disable('x-powered-by');
+
+        // Trust the reverse proxy (e.g. traefik) when hosted behind one, so req.ip
+        // and the SDK OAuth endpoints' per-IP rate limiting use the real client IP
+        // from X-Forwarded-For instead of the proxy's. Without this, every client
+        // shares the proxy IP and the shared /register limit can lock everyone out.
+        // TRUST_PROXY: a hop count ("1"), boolean ("true"/"false"), or an Express
+        // trust-proxy string (e.g. "loopback, uniquelocal"). Unset → not trusted.
+        const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+        if (trustProxy !== undefined) {
+          app.set('trust proxy', trustProxy);
+        }
 
         // Parse JSON bodies - but NOT for /message endpoint (SSE transport needs raw stream)
         app.use((req, res, next) => {

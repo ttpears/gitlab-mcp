@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-06-27
+
+### Added
+- `TRUST_PROXY` env var (HTTP mode): sets Express `trust proxy` so `req.ip` and the SDK OAuth endpoints' per-IP rate limiting use the real client IP from `X-Forwarded-For` when running behind a reverse proxy (traefik, nginx). Without it, every client shares the proxy's IP and the shared `/register` rate limit can lock everyone out. Accepts a hop count (`1`), boolean, or an Express trust-proxy string (e.g. `loopback, uniquelocal`). Unset → not trusted (unchanged default). Required for the swarm/traefik-hosted OAuth connector.
+
 ## [2.0.0] - 2026-06-27
 
 ### Added

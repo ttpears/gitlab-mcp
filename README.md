@@ -413,6 +413,7 @@ Premium+Duo with semantic code search.
 | `GITLAB_TIMEOUT` | Request timeout in milliseconds | `30000` |
 | `GITLAB_MCP_PORT` | HTTP server port | `8008` |
 | `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | `stdio` |
+| `TRUST_PROXY` | Express `trust proxy` when behind a reverse proxy (hop count like `1`, boolean, or IP/subnet list). Needed for correct per-IP OAuth rate limiting behind traefik/nginx | unset |
 | `GITLAB_MCP_OAUTH` | Enable brokered OAuth 2.1 (HTTP mode) — see [OAuth for remote users](#oauth-for-remote-users) | `false` |
 | `MCP_SERVER_URL` | Public HTTPS URL of this server (OAuth issuer/resource id) — required when OAuth is on | — |
 | `GITLAB_OAUTH_CLIENT_ID` | GitLab application id — required when OAuth is on | — |
