@@ -411,6 +411,8 @@ Premium+Duo with semantic code search.
 | `GITLAB_ALLOW_SHARED_ESCAPE_HATCH` | Allow `execute_custom_query` / `execute_rest_read` / `execute_rest_write` to run on the shared token (otherwise they require per-call credentials) | `false` |
 | `GITLAB_MAX_PAGE_SIZE` | Maximum items per page (1–100) | `50` |
 | `GITLAB_TIMEOUT` | Request timeout in milliseconds | `30000` |
+| `GITLAB_MAX_CONCURRENCY` | Max concurrent in-flight requests to GitLab (excess queue, never rejected). `0` = unlimited | `16` |
+| `GITLAB_ANALYTICS_MAX_PROJECTS` | Cap on projects scanned per group-analytics fan-out (logs when bounded) | `500` |
 | `GITLAB_MCP_PORT` | HTTP server port | `8008` |
 | `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | `stdio` |
 | `TRUST_PROXY` | Express `trust proxy` when behind a reverse proxy (hop count like `1`, boolean, or IP/subnet list). Needed for correct per-IP OAuth rate limiting behind traefik/nginx | unset |

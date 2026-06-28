@@ -68,6 +68,42 @@ export interface PaginatedResult<T> {
   pageInfo: PageInfo;
 }
 
+/**
+ * Async counting semaphore. `acquire()` resolves immediately while capacity
+ * remains, otherwise queues (FIFO) until a holder releases — it throttles, it
+ * never rejects. A non-positive limit means unlimited.
+ */
+export class Semaphore {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+  constructor(private readonly max: number) {}
+
+  async acquire(): Promise<() => void> {
+    if (this.max <= 0) return () => {};
+    if (this.active < this.max) {
+      this.active++;
+      return () => this.releaseOne();
+    }
+    return new Promise<() => void>((resolve) => {
+      this.waiters.push(() => {
+        this.active++;
+        resolve(() => this.releaseOne());
+      });
+    });
+  }
+
+  /** Current number of queued (waiting) acquirers — for observability. */
+  get queued(): number {
+    return this.waiters.length;
+  }
+
+  private releaseOne(): void {
+    this.active--;
+    const next = this.waiters.shift();
+    if (next) next();
+  }
+}
+
 export class GitLabGraphQLClient {
   // Upper bound on the per-user client cache (see getUserClient). LRU-evicted.
   private static readonly MAX_USER_CLIENTS = 500;
@@ -77,9 +113,13 @@ export class GitLabGraphQLClient {
   private config: Config;
   private schema: any = null;
   private userClients: Map<string, GraphQLClient> = new Map();
+  // Soft cost guard: bounds concurrent in-flight requests to GitLab across all
+  // tools/users. Excess requests queue (never rejected). 0 = unlimited.
+  private requestGate: Semaphore;
 
   constructor(config: Config) {
     this.config = config;
+    this.requestGate = new Semaphore(config.maxConcurrency);
 
     if (config.token) {
       this.fullAccessClient = this.createClient(config.gitlabUrl, config.token);
@@ -91,23 +131,38 @@ export class GitLabGraphQLClient {
   private createClient(gitlabUrl: string, accessToken: string): GraphQLClient {
     const endpoint = `${gitlabUrl.replace(/\/$/, '')}/api/graphql`;
     const timeoutMs = this.config.defaultTimeout || 30000;
-    
+
     return new GraphQLClient(endpoint, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      // Configure fetch with timeout using AbortController
-      fetch: (url, options) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        
-        return fetch(url, {
-          ...options,
-          signal: controller.signal,
-        }).finally(() => clearTimeout(timeoutId));
-      },
+      // Route through the concurrency gate (and a per-request timeout).
+      fetch: ((url: any, options: any) => this.gatedFetch(url, options || {}, timeoutMs)) as typeof fetch,
     });
+  }
+
+  /** Configured cap on projects scanned per group-analytics fan-out (soft guard). */
+  getAnalyticsMaxProjects(): number {
+    return this.config.analyticsMaxProjects;
+  }
+
+  /**
+   * Single chokepoint for every outbound GitLab request (GraphQL + REST). Acquires
+   * the concurrency gate before issuing the request — queuing rather than rejecting
+   * when at capacity — and applies the per-request timeout only once the slot is
+   * held, so queued time doesn't eat into the timeout budget.
+   */
+  private async gatedFetch(url: string | URL, options: RequestInit, timeoutMs: number): Promise<Response> {
+    const release = await this.requestGate.acquire();
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url as any, { ...options, signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+      release();
+    }
   }
 
   /**
@@ -3087,43 +3142,36 @@ export class GitLabGraphQLClient {
     const timeoutMs = this.config.defaultTimeout || 30000;
 
     return this.executeWithRetry(async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const response = await fetch(url.toString(), {
-          method,
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
-          signal: controller.signal,
-        });
+      const response = await this.gatedFetch(url.toString(), {
+        method,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      }, timeoutMs);
 
-        if (!response.ok) {
-          const statusCode = response.status;
-          let message = `${response.statusText}`;
-          try {
-            const errBody: any = await response.json();
-            message = errBody?.message || errBody?.error || JSON.stringify(errBody);
-          } catch {
-            // non-JSON body
-          }
-          const retryable = RETRY_CONFIG.retryableStatusCodes.includes(statusCode);
-          throw new GitLabAPIError(`GitLab REST ${method} ${path} failed (${statusCode}): ${message}`, {
-            code: statusCode === 401 ? 'AUTH_FAILED' : statusCode === 403 ? 'FORBIDDEN' : 'HTTP_ERROR',
-            statusCode,
-            isRetryable: retryable,
-          });
+      if (!response.ok) {
+        const statusCode = response.status;
+        let message = `${response.statusText}`;
+        try {
+          const errBody: any = await response.json();
+          message = errBody?.message || errBody?.error || JSON.stringify(errBody);
+        } catch {
+          // non-JSON body
         }
-
-        if (response.status === 204) return undefined as unknown as T;
-        const text = await response.text();
-        return (text ? JSON.parse(text) : undefined) as T;
-      } finally {
-        clearTimeout(timeoutId);
+        const retryable = RETRY_CONFIG.retryableStatusCodes.includes(statusCode);
+        throw new GitLabAPIError(`GitLab REST ${method} ${path} failed (${statusCode}): ${message}`, {
+          code: statusCode === 401 ? 'AUTH_FAILED' : statusCode === 403 ? 'FORBIDDEN' : 'HTTP_ERROR',
+          statusCode,
+          isRetryable: retryable,
+        });
       }
+
+      if (response.status === 204) return undefined as unknown as T;
+      const text = await response.text();
+      return (text ? JSON.parse(text) : undefined) as T;
     }, `REST ${method} ${path}`);
   }
 

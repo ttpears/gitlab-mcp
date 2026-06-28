@@ -264,11 +264,21 @@ export async function fetchGroupEventsInWindow(
   userConfig?: UserConfig,
 ): Promise<FetchGroupEventsResult> {
   const maxEvents = opts.maxEvents ?? MAX_EVENTS_DEFAULT;
+  const maxProjects = opts.maxProjects ?? client.getAnalyticsMaxProjects();
   const projectsPage = await client.listGroupProjectsForAnalytics(
     groupPath,
-    { includeSubgroups: opts.includeSubgroups ?? true, maxItems: opts.maxProjects ?? 500 },
+    { includeSubgroups: opts.includeSubgroups ?? true, maxItems: maxProjects },
     userConfig,
   );
+  // Soft cost guard: surface (don't silently truncate) when the scan was bounded
+  // by the project cap, so coverage limits are visible in the result + logs.
+  const projectCapHit = (projectsPage.nodes ?? []).length >= maxProjects;
+  if (projectCapHit) {
+    console.error(
+      `[analytics] group "${groupPath}" project scan bounded to ${maxProjects} projects ` +
+      `(GITLAB_ANALYTICS_MAX_PROJECTS); some projects may be omitted.`
+    );
+  }
   const projects: GroupProjectRef[] = (projectsPage.nodes ?? [])
     .map((p: { id: string; fullPath: string }) => {
       const id = parseNumericIdFromGid(p.id);
