@@ -10,6 +10,15 @@ export const ConfigSchema = z.object({
   readToken: z.string().optional(),
   maxPageSize: z.number().min(1).max(100).default(50),
   defaultTimeout: z.number().min(1000).default(30000),
+  // Soft cost guard: cap concurrent in-flight requests to GitLab. Excess requests
+  // QUEUE (they are not rejected), so heavy fan-out is throttled, not blocked,
+  // protecting GitLab's rate limits and server memory on a shared deployment.
+  // 0 = unlimited.
+  maxConcurrency: z.number().min(0).default(16),
+  // Cap on how many projects a single group-analytics fan-out will scan. High by
+  // default to preserve deep data-mining; when a scan hits it the server logs that
+  // coverage was bounded rather than silently truncating.
+  analyticsMaxProjects: z.number().min(1).default(500),
   // When true (default), per-call/header-supplied gitlabUrl is ignored and every
   // request targets the configured gitlabUrl. This closes the SSRF vector where a
   // caller points the server at internal/metadata hosts via X-GitLab-Url. Set
@@ -76,6 +85,8 @@ export function loadConfig(): Config {
     readToken,
     maxPageSize: parseInt(process.env.GITLAB_MAX_PAGE_SIZE || '50'),
     defaultTimeout: parseInt(process.env.GITLAB_TIMEOUT || '30000'),
+    maxConcurrency: parseInt(process.env.GITLAB_MAX_CONCURRENCY || '16'),
+    analyticsMaxProjects: parseInt(process.env.GITLAB_ANALYTICS_MAX_PROJECTS || '500'),
     pinHost: parseBoolEnv(process.env.GITLAB_PIN_HOST, true),
     allowSharedEscapeHatch: parseBoolEnv(process.env.GITLAB_ALLOW_SHARED_ESCAPE_HATCH, false),
   };

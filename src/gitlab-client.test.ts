@@ -1,5 +1,42 @@
-import { GitLabGraphQLClient } from './gitlab-client.js';
+import { GitLabGraphQLClient, Semaphore } from './gitlab-client.js';
 import { ConfigSchema } from './config.js';
+
+describe('Semaphore — soft concurrency guard', () => {
+  it('bounds concurrency to the limit and runs every task (queues, never rejects)', async () => {
+    const sem = new Semaphore(2);
+    let active = 0;
+    let peak = 0;
+    let done = 0;
+    const task = async () => {
+      const release = await sem.acquire();
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 10));
+      active--;
+      done++;
+      release();
+    };
+    await Promise.all(Array.from({ length: 8 }, task));
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(done).toBe(8);
+  });
+
+  it('treats a non-positive limit as unlimited', async () => {
+    const sem = new Semaphore(0);
+    let active = 0;
+    let peak = 0;
+    const task = async () => {
+      const release = await sem.acquire();
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      release();
+    };
+    await Promise.all(Array.from({ length: 6 }, task));
+    expect(peak).toBe(6);
+  });
+});
 
 const baseConfig = ConfigSchema.parse({ gitlabUrl: 'https://gitlab.example.com' });
 

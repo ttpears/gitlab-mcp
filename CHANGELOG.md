@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-06-28
+
+### Added
+- `GITLAB_OAUTH_ALLOWED_GROUPS` — restrict the brokered OAuth connector to members of the named GitLab groups (and their subgroups). The broker checks the authenticated user's group membership after GitLab login and returns `access_denied` to the client if they aren't a member of any allowed group. Empty/unset = any authenticated GitLab user (unchanged default).
+- App-level cost guards (soft — they throttle, they don't reject): `GITLAB_MAX_CONCURRENCY` (default 16, `0` = unlimited) bounds concurrent in-flight requests to GitLab across all tools/users via a queueing semaphore at the single outbound chokepoint, protecting GitLab's rate limits and server memory on shared deployments. `GITLAB_ANALYTICS_MAX_PROJECTS` (default 500) caps the per-group analytics project fan-out and now logs when a scan is bounded (the result already exposed `projectsTruncated`). Deep data-mining stays available; the controls are opt-in tuning.
+- `REDIS_URL` — back the OAuth broker state (DCR clients, pending flows, codes, tokens) with Redis instead of in-process memory. This lets the connector survive redeploys (users stay signed in) and run more than one replica behind a load balancer. Keys are namespaced by issuer host (override the base with `REDIS_KEY_PREFIX`), so multiple MCP servers can share one Redis while replicas of the same issuer share state. Unset = in-memory (unchanged default; fine for stdio/single-instance). The broker's storage now goes through an async `KvStore` abstraction (`InMemoryKvStore` / `RedisKvStore`).
+
 ## [2.0.1] - 2026-06-27
 
 ### Added

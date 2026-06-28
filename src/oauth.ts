@@ -13,7 +13,6 @@ import type {
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import {
   InvalidGrantError,
-  InvalidRequestError,
   InvalidTokenError,
   ServerError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
@@ -31,14 +30,17 @@ import {
  * never passing the client's MCP token through to GitLab (per the MCP security
  * best-practices: no token passthrough).
  *
- * Storage is in-memory and therefore single-instance. A horizontally-scaled
- * deployment would need a shared store (Redis, signed stateless tokens, etc.).
+ * Broker state (clients, pending flows, codes, tokens) lives behind a {@link KvStore}.
+ * With REDIS_URL set it is Redis-backed, so the connector survives redeploys and
+ * can run more than one replica; otherwise it falls back to in-process memory
+ * (fine for stdio/single-instance).
  */
 
 const AUTH_FLOW_TTL_MS = 10 * 60 * 1000; // pending-auth and one-time codes live 10 min
 const DEFAULT_TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // fallback when GitLab omits expires_in
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // cap idle refresh tokens at 30 days
-const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+const CLIENT_TTL_MS = 90 * 24 * 60 * 60 * 1000; // DCR client registrations
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 export interface GitLabOAuthOptions {
   /** GitLab base URL without the /api suffix, e.g. https://gitlab.com */
@@ -55,6 +57,12 @@ export interface GitLabOAuthOptions {
   callbackPath: string;
   /** Request timeout for GitLab token calls, ms */
   timeoutMs: number;
+  /**
+   * Optional access allow-list: GitLab group full-paths whose members may use
+   * this connector (a member of a group is allowed for that group and all its
+   * subgroups). Empty = open to any authenticated GitLab user.
+   */
+  allowedGroups: string[];
 }
 
 interface PendingAuth {
@@ -65,7 +73,6 @@ interface PendingAuth {
   scopes: string[];
   resource?: string;
   gitlabCodeVerifier: string;
-  expiresAt: number;
 }
 
 interface IssuedCode {
@@ -77,7 +84,6 @@ interface IssuedCode {
   gitlabAccessToken: string;
   gitlabRefreshToken?: string;
   gitlabExpiresAt: number;
-  expiresAt: number;
 }
 
 interface AccessTokenRecord {
@@ -95,7 +101,6 @@ interface RefreshTokenRecord {
   gitlabRefreshToken: string;
   /** The MCP access token minted alongside this refresh token, so rotation can revoke it. */
   accessToken: string;
-  expiresAt: number; // ms since epoch; purged after this
 }
 
 function base64url(buf: Buffer): string {
@@ -110,34 +115,132 @@ function pkceChallenge(verifier: string): string {
   return base64url(createHash('sha256').update(verifier).digest());
 }
 
-/** In-memory Dynamic Client Registration store. */
-class InMemoryClientsStore implements OAuthRegisteredClientsStore {
-  private clients = new Map<string, OAuthClientInformationFull>();
+// --- storage -----------------------------------------------------------------
 
-  getClient(clientId: string): OAuthClientInformationFull | undefined {
-    return this.clients.get(clientId);
+/**
+ * Minimal async key/value store with per-key TTL. JSON-serializable values.
+ * Keys are namespaced by the store's prefix so multiple MCP servers can share
+ * one Redis safely.
+ */
+export interface KvStore {
+  get<T>(key: string): Promise<T | undefined>;
+  set<T>(key: string, value: T, ttlMs: number): Promise<void>;
+  del(key: string): Promise<void>;
+  dispose(): void;
+}
+
+/** In-process store with lazy expiry on read plus a periodic sweep. */
+export class InMemoryKvStore implements KvStore {
+  private readonly map = new Map<string, { value: unknown; expiresAt: number }>();
+  private readonly prefix: string;
+  private sweep?: NodeJS.Timeout;
+
+  constructor(prefix = 'gitlab-mcp') {
+    this.prefix = prefix;
+    this.sweep = setInterval(() => {
+      const now = Date.now();
+      for (const [k, v] of this.map) if (v.expiresAt < now) this.map.delete(k);
+    }, SWEEP_INTERVAL_MS);
+    this.sweep.unref?.();
   }
 
-  registerClient(client: OAuthClientInformationFull): OAuthClientInformationFull {
-    this.clients.set(client.client_id, client);
+  async get<T>(key: string): Promise<T | undefined> {
+    const entry = this.map.get(this.prefix + key);
+    if (!entry) return undefined;
+    if (entry.expiresAt < Date.now()) {
+      this.map.delete(this.prefix + key);
+      return undefined;
+    }
+    return entry.value as T;
+  }
+
+  async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
+    this.map.set(this.prefix + key, { value, expiresAt: Date.now() + ttlMs });
+  }
+
+  async del(key: string): Promise<void> {
+    this.map.delete(this.prefix + key);
+  }
+
+  dispose(): void {
+    if (this.sweep) clearInterval(this.sweep);
+  }
+}
+
+interface RedisLike {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, mode: string, ttl: number): Promise<unknown>;
+  del(key: string): Promise<unknown>;
+  quit(): Promise<unknown>;
+}
+
+/** Redis-backed store. TTL is enforced by Redis (PX), so no sweep needed. */
+export class RedisKvStore implements KvStore {
+  constructor(private readonly client: RedisLike, private readonly prefix: string) {}
+
+  async get<T>(key: string): Promise<T | undefined> {
+    const raw = await this.client.get(this.prefix + key);
+    return raw == null ? undefined : (JSON.parse(raw) as T);
+  }
+
+  async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
+    await this.client.set(this.prefix + key, JSON.stringify(value), 'PX', Math.max(1, Math.floor(ttlMs)));
+  }
+
+  async del(key: string): Promise<void> {
+    await this.client.del(this.prefix + key);
+  }
+
+  dispose(): void {
+    void this.client.quit();
+  }
+}
+
+/**
+ * Build the OAuth state store. When `redisUrl` is set, connects ioredis (loaded
+ * lazily so non-Redis deployments don't pay for it); otherwise in-memory.
+ * `keyPrefix` should include the issuer so co-tenant MCPs don't collide while
+ * replicas of the same issuer DO share state.
+ */
+export async function createOAuthStore(opts: {
+  redisUrl?: string;
+  keyPrefix: string;
+}): Promise<KvStore> {
+  const prefix = `${opts.keyPrefix}:`;
+  if (opts.redisUrl) {
+    const mod: any = await import('ioredis');
+    const Redis = mod.default || mod;
+    const client = new Redis(opts.redisUrl, { maxRetriesPerRequest: 2, lazyConnect: false }) as RedisLike;
+    return new RedisKvStore(client, prefix);
+  }
+  return new InMemoryKvStore(prefix);
+}
+
+/** Dynamic Client Registration store backed by the KvStore. */
+class KvClientsStore implements OAuthRegisteredClientsStore {
+  constructor(private readonly store: KvStore) {}
+
+  async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
+    return this.store.get<OAuthClientInformationFull>(`client:${clientId}`);
+  }
+
+  async registerClient(client: OAuthClientInformationFull): Promise<OAuthClientInformationFull> {
+    await this.store.set(`client:${client.client_id}`, client, CLIENT_TTL_MS);
     return client;
   }
 }
 
+// --- provider ----------------------------------------------------------------
+
 export class GitLabOAuthProvider implements OAuthServerProvider {
   private readonly opts: GitLabOAuthOptions;
-  private readonly clients = new InMemoryClientsStore();
-  private readonly pending = new Map<string, PendingAuth>();
-  private readonly codes = new Map<string, IssuedCode>();
-  private readonly accessTokens = new Map<string, AccessTokenRecord>();
-  private readonly refreshTokens = new Map<string, RefreshTokenRecord>();
-  private cleanupTimer?: NodeJS.Timeout;
+  private readonly store: KvStore;
+  private readonly clients: KvClientsStore;
 
-  constructor(opts: GitLabOAuthOptions) {
+  constructor(opts: GitLabOAuthOptions, store: KvStore = new InMemoryKvStore()) {
     this.opts = opts;
-    this.cleanupTimer = setInterval(() => this.purgeExpired(), CLEANUP_INTERVAL_MS);
-    // Don't keep the process alive solely for cleanup.
-    this.cleanupTimer.unref?.();
+    this.store = store;
+    this.clients = new KvClientsStore(store);
   }
 
   get clientsStore(): OAuthRegisteredClientsStore {
@@ -166,23 +269,26 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
     // AuthInfo.scopes honest about the token's real capability.
     const grantedScopes = this.opts.scopes.split(/[\s,]+/).filter(Boolean);
 
-    this.pending.set(brokerState, {
-      clientId: client.client_id,
-      clientRedirectUri: params.redirectUri,
-      clientState: params.state,
-      clientCodeChallenge: params.codeChallenge,
-      scopes: grantedScopes,
-      resource: params.resource?.toString(),
-      gitlabCodeVerifier,
-      expiresAt: Date.now() + AUTH_FLOW_TTL_MS,
-    });
+    await this.store.set<PendingAuth>(
+      `pending:${brokerState}`,
+      {
+        clientId: client.client_id,
+        clientRedirectUri: params.redirectUri,
+        clientState: params.state,
+        clientCodeChallenge: params.codeChallenge,
+        scopes: grantedScopes,
+        resource: params.resource?.toString(),
+        gitlabCodeVerifier,
+      },
+      AUTH_FLOW_TTL_MS
+    );
 
     const authUrl = new URL(`${this.opts.gitlabBaseUrl.replace(/\/$/, '')}/oauth/authorize`);
     authUrl.searchParams.set('client_id', this.opts.clientId);
     authUrl.searchParams.set('redirect_uri', this.callbackUrl);
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set('state', brokerState);
-    authUrl.searchParams.set('scope', this.opts.scopes.split(/[\s,]+/).filter(Boolean).join(' '));
+    authUrl.searchParams.set('scope', grantedScopes.join(' '));
     authUrl.searchParams.set('code_challenge', pkceChallenge(gitlabCodeVerifier));
     authUrl.searchParams.set('code_challenge_method', 'S256');
 
@@ -212,13 +318,12 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    const pending = this.pending.get(brokerState);
-    if (!pending || pending.expiresAt < Date.now()) {
-      this.pending.delete(brokerState);
+    const pending = await this.store.get<PendingAuth>(`pending:${brokerState}`);
+    if (!pending) {
       res.status(400).type('text/plain').send('Authorization request expired or unknown. Please restart sign-in.');
       return;
     }
-    this.pending.delete(brokerState);
+    await this.store.del(`pending:${brokerState}`);
 
     let tokens;
     try {
@@ -233,18 +338,45 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
       return;
     }
 
+    // Access allow-list: reject users who aren't a member of any configured group
+    // before we mint anything. Return the OAuth error to the client's redirect URI
+    // (access_denied) so the MCP client surfaces a proper "not authorized" message.
+    if (this.opts.allowedGroups.length > 0) {
+      let allowed: boolean;
+      try {
+        allowed = await this.userIsInAllowedGroup(tokens.access_token);
+      } catch (err) {
+        res.status(502).type('text/plain').send(`Failed to verify group membership: ${(err as Error).message}`);
+        return;
+      }
+      if (!allowed) {
+        const denied = new URL(pending.clientRedirectUri);
+        denied.searchParams.set('error', 'access_denied');
+        denied.searchParams.set(
+          'error_description',
+          'Your GitLab account is not a member of a group permitted to use this connector.'
+        );
+        if (pending.clientState) denied.searchParams.set('state', pending.clientState);
+        res.redirect(denied.toString());
+        return;
+      }
+    }
+
     const mcpCode = randomToken();
-    this.codes.set(mcpCode, {
-      clientId: pending.clientId,
-      clientCodeChallenge: pending.clientCodeChallenge,
-      redirectUri: pending.clientRedirectUri,
-      scopes: pending.scopes,
-      resource: pending.resource,
-      gitlabAccessToken: tokens.access_token,
-      gitlabRefreshToken: tokens.refresh_token,
-      gitlabExpiresAt: Date.now() + (tokens.expires_in ? tokens.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS),
-      expiresAt: Date.now() + AUTH_FLOW_TTL_MS,
-    });
+    await this.store.set<IssuedCode>(
+      `code:${mcpCode}`,
+      {
+        clientId: pending.clientId,
+        clientCodeChallenge: pending.clientCodeChallenge,
+        redirectUri: pending.clientRedirectUri,
+        scopes: pending.scopes,
+        resource: pending.resource,
+        gitlabAccessToken: tokens.access_token,
+        gitlabRefreshToken: tokens.refresh_token,
+        gitlabExpiresAt: Date.now() + (tokens.expires_in ? tokens.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS),
+      },
+      AUTH_FLOW_TTL_MS
+    );
 
     const redirect = new URL(pending.clientRedirectUri);
     redirect.searchParams.set('code', mcpCode);
@@ -257,8 +389,8 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
     _client: OAuthClientInformationFull,
     authorizationCode: string
   ): Promise<string> {
-    const record = this.codes.get(authorizationCode);
-    if (!record || record.expiresAt < Date.now()) {
+    const record = await this.store.get<IssuedCode>(`code:${authorizationCode}`);
+    if (!record) {
       throw new InvalidGrantError('Authorization code is invalid or expired');
     }
     return record.clientCodeChallenge;
@@ -269,12 +401,12 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
     client: OAuthClientInformationFull,
     authorizationCode: string
   ): Promise<OAuthTokens> {
-    const record = this.codes.get(authorizationCode);
-    if (!record || record.expiresAt < Date.now()) {
+    const record = await this.store.get<IssuedCode>(`code:${authorizationCode}`);
+    if (!record) {
       throw new InvalidGrantError('Authorization code is invalid or expired');
     }
     // One-time use.
-    this.codes.delete(authorizationCode);
+    await this.store.del(`code:${authorizationCode}`);
     if (record.clientId !== client.client_id) {
       throw new InvalidGrantError('Authorization code was issued to a different client');
     }
@@ -285,7 +417,7 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
     client: OAuthClientInformationFull,
     refreshToken: string
   ): Promise<OAuthTokens> {
-    const record = this.refreshTokens.get(refreshToken);
+    const record = await this.store.get<RefreshTokenRecord>(`rt:${refreshToken}`);
     if (!record) {
       throw new InvalidGrantError('Refresh token is invalid');
     }
@@ -305,8 +437,8 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
 
     // Rotate: drop the old refresh token and revoke its paired access token so a
     // stolen access token can't outlive a refresh.
-    this.refreshTokens.delete(refreshToken);
-    this.accessTokens.delete(record.accessToken);
+    await this.store.del(`rt:${refreshToken}`);
+    await this.store.del(`at:${record.accessToken}`);
     return this.mintTokens({
       clientId: record.clientId,
       clientCodeChallenge: '',
@@ -316,17 +448,16 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
       gitlabAccessToken: tokens.access_token,
       gitlabRefreshToken: tokens.refresh_token ?? record.gitlabRefreshToken,
       gitlabExpiresAt: Date.now() + (tokens.expires_in ? tokens.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS),
-      expiresAt: 0,
     });
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const record = this.accessTokens.get(token);
+    const record = await this.store.get<AccessTokenRecord>(`at:${token}`);
     if (!record) {
       throw new InvalidTokenError('Unknown or revoked access token');
     }
     if (record.expiresAt * 1000 < Date.now()) {
-      this.accessTokens.delete(token);
+      await this.store.del(`at:${token}`);
       throw new InvalidTokenError('Access token has expired');
     }
     return {
@@ -345,39 +476,46 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
     _client: OAuthClientInformationFull,
     request: OAuthTokenRevocationRequest
   ): Promise<void> {
-    this.accessTokens.delete(request.token);
-    this.refreshTokens.delete(request.token);
+    await this.store.del(`at:${request.token}`);
+    await this.store.del(`rt:${request.token}`);
   }
 
   dispose(): void {
-    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.store.dispose();
   }
 
   // --- internals -----------------------------------------------------------
 
-  private mintTokens(record: IssuedCode): OAuthTokens {
+  private async mintTokens(record: IssuedCode): Promise<OAuthTokens> {
     const accessToken = randomToken();
     const refreshToken = randomToken();
     const ttlMs = Math.max(0, record.gitlabExpiresAt - Date.now()) || DEFAULT_TOKEN_TTL_MS;
     const expiresAtSec = Math.floor((Date.now() + ttlMs) / 1000);
 
-    this.accessTokens.set(accessToken, {
-      clientId: record.clientId,
-      scopes: record.scopes,
-      resource: record.resource,
-      gitlabAccessToken: record.gitlabAccessToken,
-      expiresAt: expiresAtSec,
-    });
-
-    if (record.gitlabRefreshToken) {
-      this.refreshTokens.set(refreshToken, {
+    await this.store.set<AccessTokenRecord>(
+      `at:${accessToken}`,
+      {
         clientId: record.clientId,
         scopes: record.scopes,
         resource: record.resource,
-        gitlabRefreshToken: record.gitlabRefreshToken,
-        accessToken,
-        expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
-      });
+        gitlabAccessToken: record.gitlabAccessToken,
+        expiresAt: expiresAtSec,
+      },
+      ttlMs
+    );
+
+    if (record.gitlabRefreshToken) {
+      await this.store.set<RefreshTokenRecord>(
+        `rt:${refreshToken}`,
+        {
+          clientId: record.clientId,
+          scopes: record.scopes,
+          resource: record.resource,
+          gitlabRefreshToken: record.gitlabRefreshToken,
+          accessToken,
+        },
+        REFRESH_TOKEN_TTL_MS
+      );
     }
 
     return {
@@ -387,6 +525,49 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
       scope: record.scopes.join(' '),
       ...(record.gitlabRefreshToken ? { refresh_token: refreshToken } : {}),
     };
+  }
+
+  /**
+   * Is the GitLab user (identified by their freshly-issued token) a member of any
+   * configured allowed group, or a subgroup thereof? Pages through the user's
+   * member groups and matches each allowed full-path as an exact or ancestor path
+   * (so allowing "team" admits members of "team/backend"). Case-insensitive.
+   */
+  private async userIsInAllowedGroup(gitlabAccessToken: string): Promise<boolean> {
+    const allowed = this.opts.allowedGroups.map((g) => g.toLowerCase().replace(/^\/+|\/+$/g, ''));
+    if (allowed.length === 0) return true;
+    // Up to 10 pages × 100 = 1000 groups; min_access_level=10 (Guest) = any membership.
+    for (let page = 1; page <= 10; page++) {
+      const resp = await this.gitlabApiGet(
+        `/groups?min_access_level=10&per_page=100&page=${page}`,
+        gitlabAccessToken
+      );
+      if (!resp.ok) {
+        throw new Error(`GitLab group membership lookup returned ${resp.status}`);
+      }
+      const groups = (await resp.json()) as Array<{ full_path?: string }>;
+      for (const g of groups) {
+        const fp = (g.full_path || '').toLowerCase();
+        if (!fp) continue;
+        if (allowed.some((a) => fp === a || fp.startsWith(a + '/'))) return true;
+      }
+      if (groups.length < 100) break; // last page reached
+    }
+    return false;
+  }
+
+  /** Authenticated GET against the GitLab REST API as the user, with timeout. */
+  private async gitlabApiGet(path: string, gitlabAccessToken: string) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.opts.timeoutMs);
+    try {
+      return await fetch(`${this.opts.gitlabBaseUrl.replace(/\/$/, '')}/api/v4${path}`, {
+        headers: { Authorization: `Bearer ${gitlabAccessToken}`, Accept: 'application/json' },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }
 
   private async gitlabTokenRequest(params: Record<string, string>): Promise<{
@@ -427,14 +608,6 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
       clearTimeout(timeoutId);
     }
   }
-
-  private purgeExpired(): void {
-    const now = Date.now();
-    for (const [k, v] of this.pending) if (v.expiresAt < now) this.pending.delete(k);
-    for (const [k, v] of this.codes) if (v.expiresAt < now) this.codes.delete(k);
-    for (const [k, v] of this.accessTokens) if (v.expiresAt * 1000 < now) this.accessTokens.delete(k);
-    for (const [k, v] of this.refreshTokens) if (v.expiresAt < now) this.refreshTokens.delete(k);
-  }
 }
 
 /**
@@ -448,6 +621,7 @@ export function buildOAuthOptions(input: {
   clientSecret?: string;
   scopes?: string;
   callbackPath?: string;
+  allowedGroups?: string;
   timeoutMs: number;
 }): GitLabOAuthOptions {
   const missing: string[] = [];
@@ -475,6 +649,7 @@ export function buildOAuthOptions(input: {
     clientSecret: input.clientSecret || undefined,
     scopes: input.scopes && input.scopes.trim() ? input.scopes.trim() : 'api',
     callbackPath: input.callbackPath && input.callbackPath.startsWith('/') ? input.callbackPath : '/gitlab/callback',
+    allowedGroups: (input.allowedGroups || '').split(/[\s,]+/).map((s) => s.trim()).filter(Boolean),
     timeoutMs: input.timeoutMs,
   };
 }

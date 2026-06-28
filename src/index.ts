@@ -28,7 +28,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { loadConfig } from './config.js';
 import { GitLabGraphQLClient } from './gitlab-client.js';
 import { tools } from './tools.js';
-import { GitLabOAuthProvider, buildOAuthOptions } from './oauth.js';
+import { GitLabOAuthProvider, buildOAuthOptions, createOAuthStore } from './oauth.js';
 
 // Single source of truth for the server version: read package.json at runtime so
 // it never drifts from the published package. Resolves to the repo root in both
@@ -608,10 +608,21 @@ Provide the direct link to the MR and suggest any concerns or next steps.`,
             clientSecret: process.env.GITLAB_OAUTH_CLIENT_SECRET,
             scopes: process.env.GITLAB_OAUTH_SCOPES,
             callbackPath: process.env.GITLAB_OAUTH_CALLBACK_PATH,
+            allowedGroups: process.env.GITLAB_OAUTH_ALLOWED_GROUPS,
             timeoutMs: config.defaultTimeout,
           });
-          this.oauthProvider = new GitLabOAuthProvider(oauthOptions);
           const issuerUrl = new URL(oauthOptions.serverUrl);
+          // Shared state store: Redis when REDIS_URL is set (survives redeploys,
+          // enables >1 replica), else in-memory. Namespaced by issuer host so
+          // co-tenant MCPs on one Redis don't collide but replicas DO share.
+          const oauthStore = await createOAuthStore({
+            redisUrl: process.env.REDIS_URL,
+            keyPrefix: `${process.env.REDIS_KEY_PREFIX || 'gitlab-mcp'}:${issuerUrl.host}`,
+          });
+          this.oauthProvider = new GitLabOAuthProvider(oauthOptions, oauthStore);
+          if (process.env.REDIS_URL) {
+            console.error(`[MCP] OAuth state store: Redis (${issuerUrl.host})`);
+          }
 
           // Standard AS endpoints: /authorize, /token, /register, /revoke, and the
           // .well-known metadata documents. Must be mounted at the app root.
