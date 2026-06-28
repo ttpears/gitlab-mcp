@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-06-27
+
+### Added
+- **OAuth 2.1 brokered authentication for remote hosting.** Set `GITLAB_MCP_OAUTH=true` (HTTP mode) and the server becomes its own OAuth Authorization Server in front of GitLab: it advertises Protected Resource Metadata (RFC 9728) and Authorization Server Metadata (RFC 8414), supports Dynamic Client Registration (RFC 7591), runs authorization-code + PKCE against both the MCP client and GitLab (dual-PKCE behind one fixed GitLab callback), and gates the MCP endpoints with bearer-token validation (401 + `WWW-Authenticate` → resource metadata). Each user signs in with their own GitLab identity; the server mints its own opaque bearer tokens and keeps the user's GitLab token server-side (no token passthrough). New env: `MCP_SERVER_URL`, `GITLAB_OAUTH_CLIENT_ID`, `GITLAB_OAUTH_CLIENT_SECRET`, `GITLAB_OAUTH_SCOPES`, `GITLAB_OAUTH_CALLBACK_PATH`. Implemented with the MCP SDK's `mcpAuthRouter` / `requireBearerAuth`.
+- Test suite (Jest + ts-jest, ESM): covers config hardening flags, the escape-hatch credential gate, `execute_custom_query` mutation detection, and the full OAuth broker flow (DCR, dual-PKCE authorize, GitLab code exchange, bearer minting/verification). `npm test` previously ran nothing.
+
+### Changed / Security
+- **SSRF fix — host pinning.** `GITLAB_PIN_HOST` (default `true`) makes every request target the configured `GITLAB_URL`, ignoring any per-call/header `gitlabUrl`. Previously a caller could point the server at internal/metadata hosts via `X-GitLab-Url`. Set `GITLAB_PIN_HOST=false` to restore multi-instance behavior. **Breaking** for HTTP setups that relied on `X-GitLab-Url`.
+- **Escape-hatch tools require per-user credentials by default.** `execute_custom_query`, `execute_rest_read`, and `execute_rest_write` no longer run on the shared `GITLAB_TOKEN` unless `GITLAB_ALLOW_SHARED_ESCAPE_HATCH=true`. **Breaking** for stdio/single-operator setups that used these with a shared token — set the flag to restore.
+- **`execute_custom_query` write-gate can no longer be bypassed.** Mutations are detected by parsing the GraphQL document server-side and are always write-gated, regardless of the caller-supplied `requiresWrite` flag (which a caller could previously leave `false` to run a mutation on a read path).
+- REST path segments (`iid`) are now URL-encoded, and `restRequest` rejects any resolved path that escapes `/api/v4` (defense-in-depth against path traversal).
+- Per-user GraphQL client cache is now LRU-bounded (cap 500) instead of growing one client per distinct token forever.
+- `search_issues` now caps `first` at `GITLAB_MAX_PAGE_SIZE` like every other list tool (previously uncapped).
+- `get_projects` now defaults to a valid recency sort (`latest_activity_desc`); its `sort` doc previously advertised the invalid `UPDATED_DESC` (that enum is for issues/MRs, not projects).
+- Server version is now read from `package.json` at runtime (was hardcoded `1.14.0`); the advertised MCP protocol version comes from the SDK constant instead of a hand-copied string.
+- HTTP request logging no longer prints a request-body preview and is gated behind `NODE_ENV=development`; deduplicated the `/` and `/mcp` DELETE handlers; removed an unused import and a dead variable.
+- Rewrote `.env.example`, which still documented the `GITLAB_AUTH_MODE` / `GITLAB_SHARED_ACCESS_TOKEN` env vars removed back in 1.14.0.
+
 ## [1.19.0] - 2026-05-21
 
 ### Added

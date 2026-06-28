@@ -1,5 +1,5 @@
 import { GraphQLClient, gql, ClientError } from 'graphql-request';
-import { buildClientSchema, getIntrospectionQuery, IntrospectionQuery } from 'graphql';
+import { buildClientSchema, getIntrospectionQuery, IntrospectionQuery, parse } from 'graphql';
 import type { Config, UserConfig } from './config.js';
 
 // GitLab-specific error types for better handling
@@ -69,6 +69,8 @@ export interface PaginatedResult<T> {
 }
 
 export class GitLabGraphQLClient {
+  // Upper bound on the per-user client cache (see getUserClient). LRU-evicted.
+  private static readonly MAX_USER_CLIENTS = 500;
   // Cached clients keyed by token role. At most one of these is set.
   private fullAccessClient?: GraphQLClient;
   private readClient?: GraphQLClient;
@@ -268,18 +270,54 @@ export class GitLabGraphQLClient {
     throw lastError || new GitLabAPIError('Unknown error during retry');
   }
 
+  /**
+   * Resolve the GitLab base URL to use for a request. When host-pinning is on
+   * (the default), any per-call/header-supplied gitlabUrl is ignored and the
+   * configured gitlabUrl is always used — this prevents a caller from steering
+   * the server at internal/metadata hosts (SSRF). With pinning off, the
+   * per-call gitlabUrl wins, falling back to the configured one.
+   */
+  private effectiveBaseUrl(userConfig?: UserConfig): string {
+    if (this.config.pinHost) return this.config.gitlabUrl;
+    return userConfig?.gitlabUrl || this.config.gitlabUrl;
+  }
+
   private getUserClient(userConfig: UserConfig): GraphQLClient {
-    const userKey = `${userConfig.gitlabUrl || this.config.gitlabUrl}:${userConfig.accessToken}`;
-    
-    if (!this.userClients.has(userKey)) {
-      const client = this.createClient(
-        userConfig.gitlabUrl || this.config.gitlabUrl,
-        userConfig.accessToken
-      );
+    const baseUrl = this.effectiveBaseUrl(userConfig);
+    const userKey = `${baseUrl}:${userConfig.accessToken}`;
+
+    let client = this.userClients.get(userKey);
+    if (!client) {
+      // Bound the cache: evict the oldest entry once we exceed the cap so a
+      // public multi-user server can't grow one client per distinct token forever.
+      if (this.userClients.size >= GitLabGraphQLClient.MAX_USER_CLIENTS) {
+        const oldestKey = this.userClients.keys().next().value;
+        if (oldestKey !== undefined) this.userClients.delete(oldestKey);
+      }
+      client = this.createClient(baseUrl, userConfig.accessToken);
+      this.userClients.set(userKey, client);
+    } else {
+      // Refresh LRU recency: re-insert so it becomes the most-recently-used.
+      this.userClients.delete(userKey);
       this.userClients.set(userKey, client);
     }
-    
-    return this.userClients.get(userKey)!;
+
+    return client;
+  }
+
+  /**
+   * Guard the open-ended escape-hatch tools (custom GraphQL, arbitrary REST).
+   * They run on a user's own credentials by default; using the shared
+   * GITLAB_TOKEN for them requires GITLAB_ALLOW_SHARED_ESCAPE_HATCH=true.
+   */
+  private assertEscapeHatchAllowed(userConfig?: UserConfig): void {
+    if (userConfig) return;
+    if (this.config.allowSharedEscapeHatch) return;
+    throw new Error(
+      'This open-ended tool requires per-call user credentials. Provide a token via ' +
+      'Authorization: Bearer (HTTP) or userCredentials (stdio). To allow it to use the ' +
+      'shared GITLAB_TOKEN instead, set GITLAB_ALLOW_SHARED_ESCAPE_HATCH=true.'
+    );
   }
 
   private getClient(userConfig?: UserConfig, requiresWrite = false): GraphQLClient {
@@ -330,6 +368,38 @@ export class GitLabGraphQLClient {
       () => client.request<T>(query, variables),
       'GraphQL query'
     );
+  }
+
+  /**
+   * Detect whether a GraphQL document contains a mutation operation. Used to
+   * force write-gating regardless of a caller-supplied flag. Unparseable input
+   * returns false — it will fail at GitLab with a clear syntax error.
+   */
+  private documentHasMutation(query: string): boolean {
+    try {
+      return parse(query).definitions.some(
+        (def) => def.kind === 'OperationDefinition' && def.operation === 'mutation'
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Open-ended GraphQL escape hatch. Requires per-call credentials by default
+   * (see assertEscapeHatchAllowed) and derives write-gating from the document
+   * itself — a caller cannot run a mutation against a read-only token by leaving
+   * the requiresWrite flag false.
+   */
+  async executeCustomQuery<T = any>(
+    query: string,
+    variables?: any,
+    userConfig?: UserConfig,
+    declaredWrite = false,
+  ): Promise<T> {
+    this.assertEscapeHatchAllowed(userConfig);
+    const requiresWrite = declaredWrite || this.documentHasMutation(query);
+    return this.query<T>(query, variables, userConfig, requiresWrite);
   }
 
   async fetchAllPages<T = any>(
@@ -422,6 +492,9 @@ export class GitLabGraphQLClient {
   }
 
   async getProjects(first: number = 20, after?: string, fetchAll = false, userConfig?: UserConfig, sort?: string): Promise<any> {
+    // Recency bias by default. Note the projects sort vocabulary is GitLab's
+    // string form (e.g. latest_activity_desc), not the IssueSort UPDATED_DESC enum.
+    const effectiveSort = sort || 'latest_activity_desc';
     const query = gql`
       query getProjects($first: Int!, $after: String, $sort: String) {
         projects(first: $first, after: $after, sort: $sort) {
@@ -439,14 +512,14 @@ export class GitLabGraphQLClient {
     `;
 
     if (fetchAll) {
-      return this.fetchAllPages(query, { sort }, 'projects', {
+      return this.fetchAllPages(query, { sort: effectiveSort }, 'projects', {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
       });
     }
 
-    return this.query(query, { first: Math.min(first, this.config.maxPageSize), after, sort }, userConfig);
+    return this.query(query, { first: Math.min(first, this.config.maxPageSize), after, sort: effectiveSort }, userConfig);
   }
 
   async getIssues(projectPath: string, first: number = 20, after?: string, fetchAll = false, userConfig?: UserConfig, sort?: string): Promise<any> {
@@ -1186,7 +1259,7 @@ export class GitLabGraphQLClient {
     sort?: string
   ): Promise<any> {
     await this.introspectSchema(userConfig);
-    const mappedState = state && state.toLowerCase() !== 'all' ? state.toUpperCase() : undefined;
+    const cappedFirst = Math.min(first, this.config.maxPageSize);
 
     if (projectPath) {
       const projectType = this.schema.getType('Project');
@@ -1239,7 +1312,7 @@ export class GitLabGraphQLClient {
         projectPath,
         search: searchTerm,
         state: mapped,
-        first,
+        first: cappedFirst,
         after,
         assigneeUsernames,
         authorUsername,
@@ -1300,7 +1373,7 @@ export class GitLabGraphQLClient {
       return this.query(query, {
         search: searchTerm,
         state: mapped,
-        first, // Respect user's requested limit - no forced cap
+        first: cappedFirst,
         after,
         assigneeUsernames,
         authorUsername,
@@ -2054,7 +2127,7 @@ export class GitLabGraphQLClient {
     userConfig?: UserConfig
   ): Promise<void> {
     const encodedPath = encodeURIComponent(projectPath);
-    await this.restRequest('DELETE', `/projects/${encodedPath}/issues/${iid}`, {
+    await this.restRequest('DELETE', `/projects/${encodedPath}/issues/${encodeURIComponent(iid)}`, {
       userConfig,
       requiresWrite: true,
     });
@@ -2965,7 +3038,7 @@ export class GitLabGraphQLClient {
   private resolveRestAuth(userConfig?: UserConfig, requiresWrite = false): { baseUrl: string; token: string } {
     if (userConfig) {
       return {
-        baseUrl: userConfig.gitlabUrl || this.config.gitlabUrl,
+        baseUrl: this.effectiveBaseUrl(userConfig),
         token: userConfig.accessToken,
       };
     }
@@ -2999,6 +3072,12 @@ export class GitLabGraphQLClient {
   ): Promise<T> {
     const { baseUrl, token } = this.resolveRestAuth(options.userConfig, options.requiresWrite);
     const url = new URL(`${baseUrl.replace(/\/$/, '')}/api/v4${path}`);
+    // Defense in depth: the URL constructor normalizes any ".." segments, so a
+    // path that tried to traverse above /api/v4 would resolve elsewhere. Reject
+    // anything that no longer sits under the API root before we issue the request.
+    if (url.pathname !== '/api/v4' && !url.pathname.startsWith('/api/v4/')) {
+      throw new Error(`Refusing REST request that escapes /api/v4: ${path}`);
+    }
     if (options.query) {
       for (const [k, v] of Object.entries(options.query)) {
         if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
@@ -3081,6 +3160,7 @@ export class GitLabGraphQLClient {
     query?: Record<string, any>,
     userConfig?: UserConfig,
   ): Promise<T> {
+    this.assertEscapeHatchAllowed(userConfig);
     return this.restRequest<T>('GET', this.validateRestPath(path), { query, userConfig });
   }
 
@@ -3096,6 +3176,7 @@ export class GitLabGraphQLClient {
     options: { body?: any; query?: Record<string, any> } = {},
     userConfig?: UserConfig,
   ): Promise<T> {
+    this.assertEscapeHatchAllowed(userConfig);
     return this.restRequest<T>(method, this.validateRestPath(path), {
       body: options.body,
       query: options.query,
@@ -3237,7 +3318,7 @@ export class GitLabGraphQLClient {
     userConfig?: UserConfig,
   ): Promise<any[]> {
     const encodedPath = encodeURIComponent(projectPath);
-    return this.restRequest('GET', `/projects/${encodedPath}/issues/${iid}/related_merge_requests`, {
+    return this.restRequest('GET', `/projects/${encodedPath}/issues/${encodeURIComponent(iid)}/related_merge_requests`, {
       userConfig,
     });
   }
@@ -3248,7 +3329,7 @@ export class GitLabGraphQLClient {
     userConfig?: UserConfig,
   ): Promise<any[]> {
     const encodedPath = encodeURIComponent(projectPath);
-    return this.restRequest('GET', `/projects/${encodedPath}/issues/${iid}/closed_by`, {
+    return this.restRequest('GET', `/projects/${encodedPath}/issues/${encodeURIComponent(iid)}/closed_by`, {
       userConfig,
     });
   }
@@ -3259,7 +3340,7 @@ export class GitLabGraphQLClient {
     userConfig?: UserConfig,
   ): Promise<any[]> {
     const encodedPath = encodeURIComponent(projectPath);
-    return this.restRequest('GET', `/projects/${encodedPath}/issues/${iid}/links`, {
+    return this.restRequest('GET', `/projects/${encodedPath}/issues/${encodeURIComponent(iid)}/links`, {
       userConfig,
     });
   }
@@ -3270,7 +3351,7 @@ export class GitLabGraphQLClient {
     userConfig?: UserConfig,
   ): Promise<any[]> {
     const encodedPath = encodeURIComponent(projectPath);
-    return this.restRequest('GET', `/projects/${encodedPath}/merge_requests/${iid}/closes_issues`, {
+    return this.restRequest('GET', `/projects/${encodedPath}/merge_requests/${encodeURIComponent(iid)}/closes_issues`, {
       userConfig,
     });
   }
