@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { GitLabOAuthProvider, buildOAuthOptions, GitLabOAuthOptions } from './oauth.js';
+import { GitLabOAuthProvider, buildOAuthOptions, GitLabOAuthOptions, InMemoryKvStore } from './oauth.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 
 function opts(over: Partial<GitLabOAuthOptions> = {}): GitLabOAuthOptions {
@@ -65,12 +65,12 @@ describe('buildOAuthOptions', () => {
 });
 
 describe('GitLabOAuthProvider — DCR store', () => {
-  it('registers and retrieves clients', () => {
+  it('registers and retrieves clients', async () => {
     const p = new GitLabOAuthProvider(opts());
-    const stored = p.clientsStore.registerClient!(client) as OAuthClientInformationFull;
+    const stored = (await p.clientsStore.registerClient!(client)) as OAuthClientInformationFull;
     expect(stored.client_id).toBe('client-1');
-    expect(p.clientsStore.getClient('client-1')).toBe(stored);
-    expect(p.clientsStore.getClient('nope')).toBeUndefined();
+    expect(await p.clientsStore.getClient('client-1')).toEqual(stored);
+    expect(await p.clientsStore.getClient('nope')).toBeUndefined();
     p.dispose();
   });
 });
@@ -101,6 +101,55 @@ describe('GitLabOAuthProvider — verifyAccessToken', () => {
     const p = new GitLabOAuthProvider(opts());
     await expect(p.verifyAccessToken('bogus')).rejects.toThrow(/Unknown or revoked/);
     p.dispose();
+  });
+});
+
+describe('OAuth state store', () => {
+  it('InMemoryKvStore honors TTL and delete', async () => {
+    const s = new InMemoryKvStore('t:');
+    await s.set('k', { a: 1 }, 1000);
+    expect(await s.get('k')).toEqual({ a: 1 });
+    await s.set('expired', 1, -1); // already past
+    expect(await s.get('expired')).toBeUndefined();
+    await s.del('k');
+    expect(await s.get('k')).toBeUndefined();
+    s.dispose();
+  });
+
+  it('two providers sharing a store share clients and issued tokens (HA)', async () => {
+    const store = new InMemoryKvStore('shared:');
+    const a = new GitLabOAuthProvider(opts(), store);
+    const b = new GitLabOAuthProvider(opts(), store);
+
+    // A client registered on A is visible on B.
+    await a.clientsStore.registerClient!(client);
+    expect(await b.clientsStore.getClient(client.client_id)).toBeTruthy();
+
+    // Mint a token via the full flow on A...
+    const res = fakeRes();
+    await a.authorize(
+      client,
+      { redirectUri: 'https://app.test/cb', codeChallenge: 'cc', state: 'st', scopes: ['api'] },
+      res as any
+    );
+    const brokerState = new URL(res.redirectedTo!).searchParams.get('state')!;
+    const realFetch = global.fetch;
+    global.fetch = (async () =>
+      new Response(JSON.stringify({ access_token: 'glpat-shared', expires_in: 7200 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch;
+    const cbRes = fakeRes();
+    await a.handleGitLabCallback({ query: { code: 'c', state: brokerState } } as any, cbRes as any);
+    const mcpCode = new URL(cbRes.redirectedTo!).searchParams.get('code')!;
+    const tokens = await a.exchangeAuthorizationCode(client, mcpCode);
+    global.fetch = realFetch;
+
+    // ...and verify it on B (a different provider instance) — the shared-state win.
+    const info = await b.verifyAccessToken(tokens.access_token);
+    expect((info.extra as any).gitlabToken).toBe('glpat-shared');
+
+    a.dispose();
   });
 });
 

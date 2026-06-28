@@ -421,6 +421,8 @@ Premium+Duo with semantic code search.
 | `GITLAB_OAUTH_SCOPES` | Space-separated GitLab scopes to request | `api` |
 | `GITLAB_OAUTH_CALLBACK_PATH` | Path of the fixed GitLab redirect URI | `/gitlab/callback` |
 | `GITLAB_OAUTH_ALLOWED_GROUPS` | Restrict the connector to members of these GitLab groups (comma/space separated full-paths; subgroups included). Empty = any authenticated user | unset |
+| `REDIS_URL` | Back OAuth broker state with Redis (survives redeploys, enables >1 replica). Unset = in-memory | unset |
+| `REDIS_KEY_PREFIX` | Base namespace for Redis keys (issuer host is appended) | `gitlab-mcp` |
 
 `GITLAB_TOKEN` and `GITLAB_READ_TOKEN` are **mutually exclusive**; setting both is a startup error.
 
