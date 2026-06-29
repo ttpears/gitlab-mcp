@@ -2694,7 +2694,7 @@ export class GitLabGraphQLClient {
   }
 
   /**
-   * Resolve a GitLab group's full path (e.g. "gleim/foo") to its node GID.
+   * Resolve a GitLab group's full path (e.g. "group/subgroup") to its node GID.
    * Returns undefined if the group can't be found; callers can surface that as
    * a warning instead of failing the whole query.
    */
@@ -2709,7 +2709,7 @@ export class GitLabGraphQLClient {
   }
 
   /**
-   * Resolve a GitLab project's full path (e.g. "gleim/foo/bar") to its node GID.
+   * Resolve a GitLab project's full path (e.g. "group/subgroup/project") to its node GID.
    */
   private async resolveProjectGid(fullPath: string, userConfig?: UserConfig): Promise<string | undefined> {
     const query = gql`

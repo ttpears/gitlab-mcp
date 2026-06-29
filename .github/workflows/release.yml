@@ -78,7 +78,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          # amd64 only — every deploy target (gnv-swarm, ceres) is x86_64, and the
+          # amd64 only — every deploy target is x86_64, and the
           # QEMU-emulated arm64 build dominated release time. Re-add arm64 if an
           # arm consumer ever needs it.
           platforms: linux/amd64
