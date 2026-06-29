@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.1.0] - 2026-06-28
+## [2.2.0] - 2026-06-28
+
+### Added
+- Five new MCP prompts, weighted toward team-activity workflows: `team-activity` (per-person activity across a group), `user-activity` (standup-style recap for a teammate), `triage-issues`, `project-health`, and `search-gitlab` — alongside the existing `explore-project`, `find-my-work`, `review-merge-request`.
+
+### Changed
+- **All prompt arguments are now optional** with graceful no-argument rendering. Previously `projectPath`/`mrIid` were `required: true`; clients like Claude Desktop could fail to attach a prompt at the brittle argument-collection step. Prompts now attach without input and instruct the model to ask for specifics when an argument is absent. The prompt handler is also data-driven (registry + per-prompt `render()`), and `GetPromptResult` includes a `description`.
+- Genericized internal references in docs and CI comments for public open-source consumption.
 
 ### Added
 - `GITLAB_OAUTH_ALLOWED_GROUPS` — restrict the brokered OAuth connector to members of the named GitLab groups (and their subgroups). The broker checks the authenticated user's group membership after GitLab login and returns `access_denied` to the client if they aren't a member of any allowed group. Empty/unset = any authenticated GitLab user (unchanged default).
