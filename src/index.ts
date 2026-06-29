@@ -190,116 +190,180 @@ class GitLabMCPServer {
   }
 
   private setupPromptHandlers(server: Server): void {
-    // Define helpful prompts for common GitLab workflows
-    const prompts = [
+    type PromptArg = { name: string; description: string };
+    type PromptDef = {
+      name: string;
+      title: string;
+      description: string;
+      // All arguments are OPTIONAL by design: some MCP clients (Claude Desktop)
+      // fail to attach a prompt when it declares required arguments, because the
+      // argument-collection step is brittle. Each render() degrades gracefully —
+      // it uses an argument when present and otherwise tells the model to ask.
+      args: PromptArg[];
+      render: (a: Record<string, string | undefined>) => string;
+    };
+
+    // Helper: "for project X" when provided, else an instruction to determine it.
+    const forProject = (p?: string) =>
+      p && p.trim()
+        ? `the GitLab project "${p.trim()}"`
+        : 'the relevant GitLab project (ask me for the full path, e.g. "group/project", if it is not obvious from context)';
+    const windowDays = (d?: string) => {
+      const n = d && /^\d+$/.test(d.trim()) ? parseInt(d.trim()) : 14;
+      return n;
+    };
+
+    const prompts: PromptDef[] = [
       {
         name: 'explore-project',
         title: 'Explore Project',
-        description: 'Explore a GitLab project structure and recent activity',
-        arguments: [
-          {
-            name: 'projectPath',
-            description: 'Full path of the project (e.g., "group/project-name")',
-            required: true,
-          },
-        ],
-      },
-      {
-        name: 'find-my-work',
-        title: 'Find My Work',
-        description: 'Find issues and merge requests assigned to you',
-        arguments: [],
-      },
-      {
-        name: 'review-merge-request',
-        title: 'Review Merge Request',
-        description: 'Review a specific merge request with code changes',
-        arguments: [
-          {
-            name: 'projectPath',
-            description: 'Full path of the project (e.g., "group/project-name")',
-            required: true,
-          },
-          {
-            name: 'mrIid',
-            description: 'Merge request IID number',
-            required: true,
-          },
-        ],
-      },
-    ];
-
-    server.setRequestHandler(ListPromptsRequestSchema, async () => {
-      return { prompts };
-    });
-
-    server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-      const { name, arguments: args } = request.params;
-
-      if (name === 'explore-project') {
-        const projectPath = args?.projectPath as string;
-        return {
-          messages: [
-            {
-              role: 'user',
-              content: {
-                type: 'text',
-                text: `Please explore the GitLab project "${projectPath}". Show me:
+        description: 'Overview of a GitLab project: description, recent issues/MRs, and structure',
+        args: [{ name: 'projectPath', description: 'Full path, e.g. "group/project" (optional)' }],
+        render: (a) => `Please explore ${forProject(a.projectPath)}. Show me:
 1. Project overview and description
 2. Recent issues (last 10)
 3. Recent merge requests (last 10)
 4. Repository structure (browse the root directory)
 
 Provide direct links to all resources you find.`,
-              },
-            },
-          ],
-        };
-      }
-
-      if (name === 'find-my-work') {
-        return {
-          messages: [
-            {
-              role: 'user',
-              content: {
-                type: 'text',
-                text: `Please find all issues and merge requests assigned to me. Search for:
+      },
+      {
+        name: 'find-my-work',
+        title: 'Find My Work',
+        description: 'Issues and merge requests assigned to you, plus recent activity',
+        args: [],
+        render: () => `Please find all issues and merge requests assigned to me:
 1. Open issues assigned to me
 2. Open merge requests where I'm assigned or a reviewer
 3. Recently closed items from the last week
+4. My to-do inbox
 
-Provide direct links to each item and summarize the current state.`,
-              },
-            },
-          ],
-        };
-      }
-
-      if (name === 'review-merge-request') {
-        const projectPath = args?.projectPath as string;
-        const mrIid = args?.mrIid as string;
-        return {
-          messages: [
-            {
-              role: 'user',
-              content: {
-                type: 'text',
-                text: `Please review merge request !${mrIid} in project "${projectPath}". Show me:
-1. MR title, description, and status
+Provide direct links to each item and summarize what needs my attention first.`,
+      },
+      {
+        name: 'review-merge-request',
+        title: 'Review Merge Request',
+        description: 'Review a specific merge request — status, diffs, related issues, approvals',
+        args: [
+          { name: 'projectPath', description: 'Full path, e.g. "group/project" (optional)' },
+          { name: 'mrIid', description: 'Merge request IID number (optional)' },
+        ],
+        render: (a) => {
+          const mr = a.mrIid && a.mrIid.trim() ? `merge request !${a.mrIid.trim()}` : 'the merge request I specify';
+          return `Please review ${mr} in ${forProject(a.projectPath)}.${a.mrIid ? '' : ' Ask me which MR (project path + IID) if it is not clear.'} Show me:
+1. Title, description, and status
 2. Source and target branches
-3. Changed files (browse the repository at both refs if needed)
+3. Changed files and diffs
 4. Related issues
-5. Review comments and approvals
+5. Review comments and approval status
 
-Provide the direct link to the MR and suggest any concerns or next steps.`,
-              },
-            },
-          ],
-        };
+Provide the direct link and flag any concerns or next steps.`;
+        },
+      },
+      {
+        name: 'team-activity',
+        title: 'Team Activity Summary',
+        description: 'Summarize recent activity across a GitLab group — who did what, where',
+        args: [
+          { name: 'groupPath', description: 'Group full path, e.g. "group" or "group/subgroup" (optional)' },
+          { name: 'days', description: 'Look-back window in days (optional, default 14)' },
+        ],
+        render: (a) => {
+          const scope = a.groupPath && a.groupPath.trim() ? `the "${a.groupPath.trim()}" group` : 'the relevant group (ask me which group if unclear)';
+          return `Summarize team activity in ${scope} over the last ${windowDays(a.days)} days:
+1. Use the group/user/project event feeds to gather pushes, MRs, issues, comments, and approvals
+2. Break it down by person — what each contributor worked on
+3. Call out notable merges, opened/closed issues, and review activity
+4. Note anyone who's been quiet or any stalled work
+
+Provide direct links and a concise per-person summary.`;
+        },
+      },
+      {
+        name: 'user-activity',
+        title: "Teammate's Activity (Standup)",
+        description: "Recap what a specific teammate has been working on recently",
+        args: [
+          { name: 'username', description: 'GitLab username (optional)' },
+          { name: 'days', description: 'Look-back window in days (optional, default 14)' },
+        ],
+        render: (a) => {
+          const who = a.username && a.username.trim() ? `@${a.username.trim()}` : 'the teammate I name (ask me for their username)';
+          return `Give me a standup-style recap of what ${who} has done in the last ${windowDays(a.days)} days:
+1. Their activity feed — commits/pushes, MRs opened and merged, issues touched, comments
+2. What they're currently assigned (open issues and MRs)
+3. Anything blocked or awaiting review
+
+Group by project and provide direct links.`;
+        },
+      },
+      {
+        name: 'triage-issues',
+        title: 'Triage Issues',
+        description: 'Find and prioritize open issues in a project, optionally by label',
+        args: [
+          { name: 'projectPath', description: 'Full path, e.g. "group/project" (optional)' },
+          { name: 'label', description: 'Filter to a label, e.g. "bug" (optional)' },
+        ],
+        render: (a) => `Help me triage open issues in ${forProject(a.projectPath)}${a.label && a.label.trim() ? `, filtered to the "${a.label.trim()}" label` : ''}:
+1. List open issues (most recently updated first)
+2. Group by label/priority and highlight anything unassigned or stale
+3. Surface issues with recent discussion that may need a decision
+
+Provide direct links and suggest a priority order.`,
+      },
+      {
+        name: 'project-health',
+        title: 'Project Health Check',
+        description: 'CI/CD, merge-request, and issue health snapshot for a project',
+        args: [{ name: 'projectPath', description: 'Full path, e.g. "group/project" (optional)' }],
+        render: (a) => `Give me a health snapshot of ${forProject(a.projectPath)}:
+1. Open merge requests — how many, any stale or long-open, pipeline status
+2. Recent pipeline outcomes (failures vs passes)
+3. Open issues volume and trend
+4. Anything that looks stuck or needs attention
+
+Summarize the overall state with direct links to the most important items.`,
+      },
+      {
+        name: 'search-gitlab',
+        title: 'Search GitLab',
+        description: 'Run a guided search across projects, issues, and merge requests',
+        args: [{ name: 'query', description: 'What to search for (optional)' }],
+        render: (a) => `Search GitLab for ${a.query && a.query.trim() ? `"${a.query.trim()}"` : 'the term I provide (ask me what to search for)'}:
+1. Matching projects
+2. Matching issues (open and recently closed)
+3. Matching merge requests
+
+Provide direct links and a brief summary of the most relevant results.`,
+      },
+    ];
+
+    server.setRequestHandler(ListPromptsRequestSchema, async () => ({
+      prompts: prompts.map((p) => ({
+        name: p.name,
+        title: p.title,
+        description: p.description,
+        // Declared optional (required omitted) so attachment never blocks on input.
+        arguments: p.args.map((arg) => ({ name: arg.name, description: arg.description, required: false })),
+      })),
+    }));
+
+    server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+      const def = prompts.find((p) => p.name === name);
+      if (!def) {
+        throw new McpError(ErrorCode.InvalidRequest, `Unknown prompt: ${name}`);
       }
-
-      throw new McpError(ErrorCode.InvalidRequest, `Unknown prompt: ${name}`);
+      return {
+        description: def.description,
+        messages: [
+          {
+            role: 'user',
+            content: { type: 'text', text: def.render((args ?? {}) as Record<string, string | undefined>) },
+          },
+        ],
+      };
     });
   }
 
