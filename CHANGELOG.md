@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-07-09
+
+### Fixed
+- **HTTP session teardown no longer recurses into a stack overflow.** The `transport.onclose` handler closed the session's `Server` *before* removing the session from the tracking map. Because the SDK wires `server.close()` → `transport.close()` → `transport.onclose`, that re-entered the same handler with the session still present, recursing until `RangeError: Maximum call stack size exceeded` — emitting thousands of identical "Session … closed" log lines in a single instant and driving the "remaining sessions" counter negative. The handler is now an idempotent `closeHttpSession()` helper that deletes the session from the map first and returns immediately on any re-entrant call, so a session is torn down exactly once.
+
 ## [2.2.0] - 2026-06-28
 
 ### Added
