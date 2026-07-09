@@ -43,6 +43,28 @@ const SERVER_VERSION: string = (() => {
 })();
 
 /**
+ * Idempotently tear down one HTTP session and close its server.
+ *
+ * The MCP SDK wires `server.close()` -> `transport.close()` -> `transport.onclose`,
+ * so the close handler re-enters itself. We therefore remove the session from the map
+ * BEFORE closing its server: the first call deletes the entry and closes the server;
+ * any re-entrant call finds no entry and returns immediately. This breaks the recursion
+ * that otherwise produced a `RangeError: Maximum call stack size exceeded` storm and a
+ * "remaining sessions" counter that walked past zero into negative numbers.
+ */
+export function closeHttpSession<T extends { server: { close(): Promise<unknown> } }>(
+  sessions: Map<string, T>,
+  sessionId: string | undefined,
+): void {
+  if (!sessionId) return;
+  const sessionData = sessions.get(sessionId);
+  if (!sessionData) return; // already torn down, or a re-entrant close() — no-op
+  sessions.delete(sessionId); // remove FIRST so the re-entrant close is a no-op
+  console.error(`[MCP] Session ${sessionId} closed (remaining sessions: ${sessions.size})`);
+  void sessionData.server.close().catch(() => {});
+}
+
+/**
  * Parse the TRUST_PROXY env var into an Express `trust proxy` value.
  * Returns undefined (don't trust) when unset/empty. Recognizes booleans, a hop
  * count, and otherwise passes the string through (Express accepts IP/subnet lists).
@@ -547,14 +569,7 @@ Provide direct links and a brief summary of the most relevant results.`,
         });
 
         transport.onclose = () => {
-          if (transport.sessionId) {
-            console.error(`[MCP] Session ${transport.sessionId} closed (remaining sessions: ${this.httpSessions.size - 1})`);
-            const sessionData = this.httpSessions.get(transport.sessionId);
-            if (sessionData) {
-              sessionData.server.close().catch(() => {});
-            }
-            this.httpSessions.delete(transport.sessionId);
-          }
+          closeHttpSession(this.httpSessions, transport.sessionId);
         };
 
         // Handle errors on the transport
