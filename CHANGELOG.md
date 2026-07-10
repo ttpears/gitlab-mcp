@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-07-10
+
+### Fixed
+- **Clients now recover automatically after a restart instead of wedging.** HTTP sessions are held in memory, so a redeploy wipes them; a client still holding an `Mcp-Session-Id` would get a generic `400` (GET/DELETE) or have its stale-id POST grafted onto a fresh transport, and never re-initialize — presenting as a total connector outage for that one user while everyone else was fine. Session routing is now spec-correct: an **unknown session id returns HTTP 404** (`code: -32001`) so a compliant client transparently starts a new session, and a session is created **only** for a POST carrying an `initialize` request (gated by the SDK's `isInitializeRequest`). Decision logic extracted into a pure, unit-tested `classifySessionRequest()`. (#49)
+
 ## [2.2.1] - 2026-07-09
 
 ### Fixed
