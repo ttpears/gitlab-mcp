@@ -22,6 +22,7 @@ import {
   ErrorCode,
   McpError,
   LATEST_PROTOCOL_VERSION,
+  isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
@@ -62,6 +63,32 @@ export function closeHttpSession<T extends { server: { close(): Promise<unknown>
   sessions.delete(sessionId); // remove FIRST so the re-entrant close is a no-op
   console.error(`[MCP] Session ${sessionId} closed (remaining sessions: ${sessions.size})`);
   void sessionData.server.close().catch(() => {});
+}
+
+/**
+ * How a Streamable HTTP request should be routed against the in-memory session map.
+ *   - `existing`    → a known session id; reuse its transport.
+ *   - `expired`     → a session id was supplied but is unknown (expired, or wiped by a
+ *                     restart — sessions are in-memory). Answer HTTP 404 so a spec-compliant
+ *                     client transparently starts a new session instead of wedging.
+ *   - `create`      → no session id and a POST carrying an initialize request; open a session.
+ *   - `bad-request` → no session id and not an initialize request; HTTP 400.
+ */
+export type SessionRequestRoute = 'existing' | 'expired' | 'create' | 'bad-request';
+
+export function classifySessionRequest(opts: {
+  hasKnownSession: boolean;
+  sessionIdPresent: boolean;
+  method: string;
+  isInitialize: boolean;
+}): SessionRequestRoute {
+  if (opts.hasKnownSession) return 'existing';
+  // A session id we don't recognize → treat as expired (client must re-initialize).
+  // This is the key recovery path after a redeploy: never try to graft a stale-id
+  // request onto a fresh transport, and never fall through to a generic 400.
+  if (opts.sessionIdPresent) return 'expired';
+  if (opts.method === 'POST' && opts.isInitialize) return 'create';
+  return 'bad-request';
 }
 
 /**
@@ -503,7 +530,14 @@ Provide direct links and a brief summary of the most relevant results.`,
         console.error(`[MCP] Request: ${req.method} session=${sessionIdHeader || 'none'}`);
       }
 
-      if (sessionIdHeader && this.httpSessions.has(sessionIdHeader)) {
+      const route = classifySessionRequest({
+        hasKnownSession: !!sessionIdHeader && this.httpSessions.has(sessionIdHeader),
+        sessionIdPresent: !!sessionIdHeader,
+        method: req.method,
+        isInitialize: isInitializeRequest((req as any).body),
+      });
+
+      if (route === 'existing') {
         // Existing session: reuse transport and update credentials
         const sessionData = this.httpSessions.get(sessionIdHeader)!;
         const userConfig = this.extractUserCredentials(req);
@@ -521,8 +555,23 @@ Provide direct links and a brief summary of the most relevant results.`,
         return;
       }
 
-      // New session initialization
-      if (req.method === 'POST') {
+      // Unknown/stale session id → 404 so a spec-compliant client re-initializes.
+      // This is the recovery path after a redeploy (in-memory sessions are wiped);
+      // never graft a stale-id request onto a fresh transport.
+      if (route === 'expired') {
+        res.status(404).json({
+          jsonrpc: '2.0',
+          error: {
+            code: -32001,
+            message: 'Session not found or expired. Reinitialize with an initialize request.',
+          },
+          id: null,
+        });
+        return;
+      }
+
+      // New session initialization (a POST carrying an initialize request)
+      if (route === 'create') {
         // If we have too many sessions, clean up old ones immediately
         if (this.httpSessions.size > 10) {
           const now = Date.now();
@@ -582,7 +631,7 @@ Provide direct links and a brief summary of the most relevant results.`,
         return;
       }
 
-      // No valid session and not a POST request
+      // route === 'bad-request': no session id and not an initialize request.
       res.status(400).json({
         jsonrpc: '2.0',
         error: {
