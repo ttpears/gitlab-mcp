@@ -16,14 +16,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - run: npm ci
       - run: npm run build
 
-      # Trusted publishing (OIDC) requires npm >= 11.5.1; Node 20 ships with npm 10.x
-      - run: npm install -g npm@latest
+      # Trusted publishing (OIDC) requires npm >= 11.5.1. Pin to the npm 11 major:
+      # it satisfies the OIDC floor and stays compatible with the Node version.
+      # (Do NOT use npm@latest — npm 12 requires Node >= 22.22/24.15 and previously
+      # broke this job with EBADENGINE when the runner was on Node 20.)
+      - run: npm install -g npm@^11
 
       - name: Publish to npm with provenance
         # Uses npm trusted publishing via GitHub OIDC (id-token: write).
