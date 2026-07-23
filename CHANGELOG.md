@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-07-22
+
+### Fixed
+- **Release workflow no longer fails on `EBADENGINE`.** The `release` job pinned Node 20 then ran `npm install -g npm@latest`; current `npm@latest` (12.x) requires Node ≥22.22/24.15, so the step failed on every release since ~2.2.1 — breaking `npm publish` and GitHub Release creation (the independent `docker` job still published the image, masking it). The job now runs on Node 24 and pins `npm@^11`, which meets the OIDC trusted-publishing floor (≥11.5.1) without chasing a major that outpaces Node. No functional change to the server; this release also validates the fixed pipeline end-to-end.
+
 ## [2.2.3] - 2026-07-22
 
 ### Changed
