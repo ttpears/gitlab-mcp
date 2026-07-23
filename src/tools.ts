@@ -114,9 +114,9 @@ const getProjectsTool: Tool = {
   },
   inputSchema: withUserAuth(z.object({
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
     sort: z.string().optional().describe('GitLab project sort string (e.g., latest_activity_desc, created_desc, name_asc, stars_desc). Defaults to latest_activity_desc for recency.'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -142,9 +142,9 @@ const getIssuesTool: Tool = {
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -173,9 +173,9 @@ const getMergeRequestsTool: Tool = {
   inputSchema: withUserAuth(z.object({
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -464,7 +464,7 @@ const resolvePathTool: Tool = {
   inputSchema: withUserAuth(z.object({
     fullPath: z.string().min(1).describe('Project or group full path (e.g., "group/subgroup/project")'),
     first: z.number().min(1).max(100).default(20).describe('Number of items to retrieve when listing group projects'),
-    after: z.string().optional().describe('Cursor for pagination'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -488,7 +488,7 @@ const getGroupProjectsTool: Tool = {
     fullPath: z.string().min(1).describe('Group full path (e.g., "group/subgroup")'),
     searchTerm: z.string().optional().transform(v => v?.trim() || undefined).describe('Optional search term to filter group projects'),
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -533,8 +533,8 @@ const globalSearchTool: Tool = {
   inputSchema: withUserAuth(z.object({
     searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term (leave empty for recent activity)'),
     first: z.number().min(1).max(100).default(20).describe('Number of results to retrieve per category'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results per category'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages per category in one call, up to ~100 items each — NOT exhaustive. For complete results, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -577,8 +577,8 @@ const searchProjectsTool: Tool = {
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
       .describe('Search term to find projects by name or description'),
     first: z.number().min(1).max(100).default(20).describe('Number of projects to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -609,9 +609,9 @@ const searchIssuesTool: Tool = {
     authorUsername: z.string().optional().describe('Filter by author username (e.g., "cdhanlon")'),
     labelNames: z.array(z.string()).optional().describe('Filter by label names (e.g., ["Priority::High", "bug"])'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -674,9 +674,9 @@ const searchMergeRequestsTool: Tool = {
     projectPath: z.string().optional().describe('Project path (e.g., "group/project"). Required for text searches, optional for username searches.'),
     state: z.string().default('all').describe('Filter by merge request state (opened, closed, merged, all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
     sort: z.string().optional().describe('Sort order (e.g., UPDATED_DESC, CREATED_DESC, CREATED_ASC). Defaults to UPDATED_DESC for recency.'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -736,8 +736,8 @@ const searchUsersTool: Tool = {
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
       .describe('Search term to find users by username or name'),
     first: z.number().min(1).max(100).default(20).describe('Number of users to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -766,8 +766,8 @@ const searchGroupsTool: Tool = {
       .refine(val => val.length > 0, { message: 'Search term cannot be empty' })
       .describe('Search term to find groups by name or path'),
     first: z.number().min(1).max(100).default(20).describe('Number of groups to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -878,8 +878,8 @@ const getMergeRequestPipelinesTool: Tool = {
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     iid: z.string().describe('Merge request IID'),
     first: z.number().min(1).max(100).default(20).describe('Number of pipelines to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -909,8 +909,8 @@ const getPipelineJobsTool: Tool = {
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     pipelineIid: z.string().describe('Pipeline IID'),
     first: z.number().min(1).max(100).default(20).describe('Number of jobs to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -995,8 +995,8 @@ const getMergeRequestCommitsTool: Tool = {
     projectPath: z.string().describe('Full path of the project (e.g., "group/project-name")'),
     iid: z.string().describe('Merge request IID'),
     first: z.number().min(1).max(100).default(20).describe('Number of commits to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1031,8 +1031,8 @@ const getNotesTool: Tool = {
     noteableType: z.enum(['issue', 'merge_request']).describe('Type of item to get notes for'),
     iid: z.string().describe('Issue or merge request IID'),
     first: z.number().min(1).max(100).default(20).describe('Number of notes to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1315,8 +1315,8 @@ const listMilestonesTool: Tool = {
     search: z.string().optional().describe('Search milestones by title'),
     includeAncestors: z.boolean().default(false).describe('Include milestones from ancestor groups'),
     first: z.number().min(1).max(100).default(20).describe('Number of milestones to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1350,8 +1350,8 @@ const listIterationsTool: Tool = {
     groupPath: z.string().describe('Full path of the group (e.g., "my-group" or "parent/child-group")'),
     state: z.string().optional().describe('Filter by state: upcoming, current, opened, closed (omit for all)'),
     first: z.number().min(1).max(100).default(20).describe('Number of iterations to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1394,7 +1394,7 @@ const getTimeTrackingTool: Tool = {
     iid: z.string().describe('Issue or merge request IID'),
     includeTimelogs: z.boolean().default(true).describe('Whether to include individual timelog entries'),
     first: z.number().min(1).max(100).default(20).describe('Number of timelog entries to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1500,8 +1500,8 @@ const listGroupMembersTool: Tool = {
     groupPath: z.string().describe('Full path of the group (e.g., "my-group" or "parent/child-group")'),
     search: z.string().optional().describe('Optional search term to filter members by name or username'),
     first: z.number().min(1).max(100).default(20).describe('Number of members to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1533,8 +1533,8 @@ const searchLabelsTool: Tool = {
     isProject: z.boolean().describe('Whether the path is a project (true) or group (false)'),
     search: z.string().optional().describe('Optional search term to filter labels'),
     first: z.number().min(1).max(100).default(20).describe('Number of labels to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1567,8 +1567,8 @@ const getUserIssuesTool: Tool = {
     state: z.string().default('opened').describe('Filter by issue state (opened, closed, all)'),
     projectPath: z.string().optional().describe('Optional: limit search to a specific project'),
     first: z.number().min(1).max(100).default(20).describe('Number of issues to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1628,8 +1628,8 @@ const getUserMergeRequestsTool: Tool = {
     state: z.string().default('opened').describe('Filter by MR state (opened, closed, merged, all)'),
     projectPath: z.string().optional().describe('Optional: limit search to a specific project'),
     first: z.number().min(1).max(100).default(20).describe('Number of merge requests to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
@@ -1917,8 +1917,8 @@ const listMyTodosTool: Tool = {
       .optional()
       .describe('Sort order — e.g. CREATED_DESC (default on server), CREATED_ASC, UPDATED_DESC, UPDATED_ASC.'),
     first: z.number().min(1).max(100).default(20).describe('Number of todos to retrieve'),
-    after: z.string().optional().describe('Cursor for pagination'),
-    fetchAll: z.boolean().default(false).describe('Fetch all pages up to 100 results'),
+    after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages in one call, up to "first" items total (max 100) — NOT exhaustive. For complete results or accurate counts, leave this false and paginate via after (pageInfo.endCursor).'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;

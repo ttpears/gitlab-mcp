@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-07-22
+
+### Changed
+- **Honest pagination guidance in list-tool schemas (descriptions only — no behavior change).** `fetchAll` advertised *"Fetch all pages up to 100 results"* but is bounded by `first` (default 20), so callers trusting it silently undercounted — e.g. merge-request throughput/totals stopped at ~20. The `fetchAll` description now states it fetches multiple pages up to `first` items (max 100) and is **not** exhaustive, and the `after` parameter documents the cursor loop (pass `pageInfo.endCursor`, repeat until `hasNextPage` is false) as the reliable path to complete results and accurate totals.
+
 ## [2.2.2] - 2026-07-10
 
 ### Fixed
