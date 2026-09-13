@@ -14,6 +14,8 @@ A community MCP server for GitLab — works with **any GitLab tier** (Free, Prem
 npx @ttpears/gitlab-mcp-server
 ```
 
+Field notes: [Two session bugs that broke my GitLab MCP server](https://hackyourworld.com/gitlab-mcp-session-bugs-restart-404/) explains the recursive close callback and stale HTTP session behavior behind the current lifecycle handling.
+
 ---
 
 ## Choose your deployment
