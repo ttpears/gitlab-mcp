@@ -417,6 +417,7 @@ Premium+Duo with semantic code search.
 | `GITLAB_ANALYTICS_MAX_PROJECTS` | Cap on projects scanned per group-analytics fan-out (logs when bounded) | `500` |
 | `GITLAB_MCP_PORT` | HTTP server port | `8008` |
 | `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | `stdio` |
+| `MCP_ALLOWED_ORIGINS` | Comma-separated browser origins allowed for HTTP requests. Defaults to localhost/127.0.0.1 on the configured port plus the origin of `MCP_SERVER_URL`. Requests without Origin remain supported | — |
 | `TRUST_PROXY` | Express `trust proxy` when behind a reverse proxy (hop count like `1`, boolean, or IP/subnet list). Needed for correct per-IP OAuth rate limiting behind traefik/nginx | unset |
 | `GITLAB_MCP_OAUTH` | Enable brokered OAuth 2.1 (HTTP mode) — see [OAuth for remote users](#oauth-for-remote-users) | `false` |
 | `MCP_SERVER_URL` | Public HTTPS URL of this server (OAuth issuer/resource id) — required when OAuth is on | — |
@@ -473,6 +474,11 @@ curl http://localhost:8008/health
 
 See [`CHANGELOG.md`](./CHANGELOG.md). Releases before 1.14.0 are in
 [GitHub releases](https://github.com/ttpears/gitlab-mcp/releases).
+
+## Runtime and MCP compatibility
+
+Node.js 22 or later is required; the container uses Node.js 24 LTS. HTTP browser clients must use an allowed origin (`MCP_ALLOWED_ORIGINS`); public deployments should set `MCP_SERVER_URL`. Native clients without an `Origin` header continue to work. Tool execution and input-validation failures return `isError: true` with a text explanation. Object results include `structuredContent` alongside the JSON text for older clients.
+
 
 ## License
 

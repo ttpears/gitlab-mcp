@@ -15,8 +15,8 @@ export interface Tool {
   name: string;
   title?: string;  // Human-friendly display name (MCP 2025-11-25)
   description: string;
-  inputSchema: z.ZodSchema;
-  outputSchema?: z.ZodSchema;  // Structured output schema (MCP 2025-11-25)
+  inputSchema: z.ZodType<any>;
+  outputSchema?: z.ZodType<any>;  // Structured output schema (MCP 2025-11-25)
   requiresAuth: boolean;
   requiresWrite: boolean;
   annotations?: {
@@ -268,7 +268,7 @@ const executeCustomQueryTool: Tool = {
   },
   inputSchema: withUserAuth(z.object({
     query: z.string().describe('GraphQL query string. Example: query { issues(assigneeUsernames: ["cdhanlon"], state: opened, first: 50) { nodes { iid title webUrl } } }'),
-    variables: z.record(z.any()).optional().describe('Variables for the GraphQL query'),
+    variables: z.record(z.string(), z.any()).optional().describe('Variables for the GraphQL query'),
     requiresWrite: z.boolean().default(false).describe('Hint that this needs write access. Mutations are auto-detected and always write-gated regardless of this flag.'),
   })),
   handler: async (input, client, userConfig) => {
@@ -291,7 +291,7 @@ const executeRestReadTool: Tool = {
       .min(1)
       .describe('Path under /api/v4, beginning with "/" (e.g. "/projects/42/issues" or "/projects/foo%2Fbar/repository/commits/HEAD"). Must not include host, "/api/v4" prefix, or "?" query string.'),
     query: z
-      .record(z.union([z.string(), z.number(), z.boolean()]))
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
       .optional()
       .describe('Query string parameters (e.g. { state: "opened", per_page: 20 }). Values are coerced to strings.'),
   })),
@@ -318,17 +318,25 @@ const executeRestWriteTool: Tool = {
       .min(1)
       .describe('Path under /api/v4, beginning with "/" (e.g. "/projects/42/issues" or "/projects/foo%2Fbar/merge_requests/3/merge"). Must not include host, "/api/v4" prefix, or "?" query string.'),
     body: z
-      .any()
+      .union([z.record(z.string(), z.unknown()), z.array(z.unknown()), z.string(), z.number(), z.boolean(), z.null()])
       .optional()
-      .describe('Request body — JSON-serialized as application/json. Omit for endpoints that don\'t take a body (most DELETE / some PUT).'),
+      .describe('Request body as a JSON value or JSON-encoded string. Sent as application/json; nested objects are preserved. Omit for endpoints that don\'t take a body (most DELETE / some PUT).'),
     query: z
-      .record(z.union([z.string(), z.number(), z.boolean()]))
+      .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
       .optional()
       .describe('Query string parameters. Most write endpoints take their args in the body, but a few mix.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
-    return client.executeRestWrite(input.method, input.path, { body: input.body, query: input.query }, credentials);
+    let body = input.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch {
+        throw new Error('body must be valid JSON when supplied as a string');
+      }
+    }
+    return client.executeRestWrite(input.method, input.path, { body, query: input.query }, credentials);
   },
 };
 

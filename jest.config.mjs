@@ -1,14 +1,15 @@
-/** @type {import('ts-jest').JestConfigWithTsJest} */
+/** @type {import('jest').Config} */
 export default {
-  preset: 'ts-jest/presets/default-esm',
   testEnvironment: 'node',
   extensionsToTreatAsEsm: ['.ts'],
   moduleNameMapper: {
-    // Source uses NodeNext-style `.js` import specifiers; map them back to `.ts`.
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   transform: {
-    '^.+\\.tsx?$': ['ts-jest', { useESM: true }],
+    '^.+\\.tsx?$': ['@swc/jest', {
+      jsc: { parser: { syntax: 'typescript' }, target: 'es2022' },
+      module: { type: 'es6' },
+    }],
   },
   testMatch: ['**/src/**/*.test.ts'],
 };

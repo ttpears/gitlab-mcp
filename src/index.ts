@@ -7,13 +7,12 @@ import { randomUUID } from 'node:crypto';
 import { realpathSync, readFileSync } from 'node:fs';
 import { URL, fileURLToPath } from 'url';
 import express from 'express';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import { z } from 'zod';
 
 // Helper to break type inference chain and avoid "Type instantiation is excessively deep" errors
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const toJsonSchema = (schema: any): Record<string, unknown> =>
-  zodToJsonSchema(schema, { target: 'jsonSchema7' }) as Record<string, unknown>;
+  z.toJSONSchema(schema, { target: 'draft-7', io: 'input' }) as Record<string, unknown>;
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -106,7 +105,19 @@ export function parseTrustProxy(value: string | undefined): boolean | number | s
   return v;
 }
 
-class GitLabMCPServer {
+/** Reject browser requests from untrusted origins before parsing or authentication. */
+export function createOriginGuard(allowedOrigins: ReadonlySet<string>): express.RequestHandler {
+  return (req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin !== undefined && !allowedOrigins.has(origin)) {
+      res.status(403).json({ error: 'Origin is not allowed' });
+      return;
+    }
+    next();
+  };
+}
+
+export class GitLabMCPServer {
   private server: Server | null = null; // Used only for stdio mode
   private gitlabClient!: GitLabGraphQLClient;
   private httpSessions: Map<string, {
@@ -225,15 +236,20 @@ class GitLabMCPServer {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2),
+              text: JSON.stringify(result ?? null, null, 2),
             },
           ],
+          ...(result !== null && typeof result === 'object' && !Array.isArray(result)
+            ? { structuredContent: result }
+            : {}),
         };
       } catch (error) {
-        if (error instanceof Error) {
-          throw new McpError(ErrorCode.InternalError, error.message);
-        }
-        throw new McpError(ErrorCode.InternalError, 'Unknown error occurred');
+        // Execution and validation failures are tool results so clients can repair
+        // the call. Unknown tools remain protocol errors above.
+        return {
+          isError: true,
+          content: [{ type: 'text', text: error instanceof Error ? error.message : 'Unknown error occurred' }],
+        };
       }
     });
   }
@@ -691,6 +707,14 @@ Provide direct links and a brief summary of the most relevant results.`,
           app.set('trust proxy', trustProxy);
         }
 
+        const allowedOrigins = new Set([
+          `http://localhost:${port}`,
+          `http://127.0.0.1:${port}`,
+          ...(process.env.MCP_SERVER_URL ? [new URL(process.env.MCP_SERVER_URL).origin] : []),
+          ...(process.env.MCP_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean),
+        ]);
+        app.use(createOriginGuard(allowedOrigins));
+
         // Parse JSON bodies - but NOT for /message endpoint (SSE transport needs raw stream)
         app.use((req, res, next) => {
           if (req.path === '/message') {
@@ -703,11 +727,13 @@ Provide direct links and a brief summary of the most relevant results.`,
 
         // CORS and headers
         app.use((req, res, next) => {
-          res.header('Access-Control-Allow-Origin', '*');
+          if (req.headers.origin) {
+            res.header('Access-Control-Allow-Origin', req.headers.origin);
+            res.vary('Origin');
+          }
           res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID, Cache-Control');
+          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID, Cache-Control, MCP-Protocol-Version');
           res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version');
-          res.header('MCP-Protocol-Version', LATEST_PROTOCOL_VERSION);
 
           // Disable buffering for SSE streams
           if (req.headers.accept?.includes('text/event-stream')) {
@@ -770,6 +796,7 @@ Provide direct links and a brief summary of the most relevant results.`,
           mcpGuards.push(
             requireBearerAuth({
               verifier: this.oauthProvider,
+              expectedResource: issuerUrl,
               resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(issuerUrl),
             })
           );

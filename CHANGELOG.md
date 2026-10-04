@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- `execute_rest_write` now accepts JSON-encoded body strings without double-encoding them. Nested JSON object payloads are covered by an end-to-end regression test (#41).
+- Tool validation and execution failures return MCP `isError` results; unknown tool names remain protocol errors. Empty REST responses serialize as `null` instead of producing invalid text content.
+- HTTP CORS allows the `MCP-Protocol-Version` request header and no longer advertises a fixed protocol version for every response.
+
+### Changed
+- Object tool results include `structuredContent` alongside the existing JSON text.
+- HTTP requests validate browser origins against localhost, `MCP_SERVER_URL`, and the new comma-separated `MCP_ALLOWED_ORIGINS` setting. Untrusted origins receive HTTP 403.
+- OAuth authorization rejects resources other than this server, and bearer validation enforces the configured resource audience.
+- Refresh dependencies, including MCP SDK 1.32, graphql-request 7, Express 5.2, Jest 30, Zod 4, ioredis 6, and TypeScript 7; correct GraphQL rate-limit header handling for the new client API.
+- Use Zod 4 native JSON Schema conversion and SWC for Jest transforms, replacing zod-to-json-schema and ts-jest.
+- Require Node.js 22 or later, test Node 22/24 in CI, and use Node 24 LTS in Docker.
+
 ## [2.2.4] - 2026-07-22
 
 ### Fixed

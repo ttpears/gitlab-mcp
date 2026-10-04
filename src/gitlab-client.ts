@@ -176,8 +176,7 @@ export class GitLabGraphQLClient {
       const errors = response.errors as GitLabGraphQLError[] | undefined;
       
       if (statusCode === 429) {
-        const headers = response.headers as Record<string, string> | undefined;
-        const retryAfterHeader = headers?.['retry-after'] || '60';
+        const retryAfterHeader = response.headers?.get('retry-after') || '60';
         const retryAfter = parseInt(retryAfterHeader, 10);
         return new GitLabAPIError(
           `Rate limited by GitLab. Retry after ${retryAfter}s`,
