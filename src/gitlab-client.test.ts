@@ -1,3 +1,4 @@
+import { ClientError } from 'graphql-request';
 import { GitLabGraphQLClient, Semaphore } from './gitlab-client.js';
 import { ConfigSchema } from './config.js';
 
@@ -64,5 +65,16 @@ describe('execute_custom_query mutation auto-detection', () => {
     await expect(
       client.executeCustomQuery('mutation { createNote(input: {}) { note { id } } }')
     ).rejects.toThrow(/Write operation requires/);
+  });
+});
+
+
+describe('graphql-request 7 rate-limit headers', () => {
+  it('reads Retry-After through the Headers API', () => {
+    const client = new GitLabGraphQLClient(baseConfig);
+    const error = new ClientError({ status: 429, headers: new Headers({ 'Retry-After': '17' }), body: '{}' }, { query: 'query { x }' });
+    const parsed = (client as any).parseError(error);
+    expect(parsed.isRateLimited).toBe(true);
+    expect(parsed.retryAfter).toBe(17);
   });
 });

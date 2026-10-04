@@ -13,6 +13,7 @@ import type {
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import {
   InvalidGrantError,
+  InvalidTargetError,
   InvalidTokenError,
   ServerError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
@@ -261,6 +262,15 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response
   ): Promise<void> {
+    const resource = params.resource ?? new URL(this.opts.serverUrl);
+    const normalizeResource = (url: URL) => {
+      const value = new URL(url);
+      value.hash = '';
+      return value.toString().replace(/\/$/, '');
+    };
+    if (normalizeResource(resource) !== normalizeResource(new URL(this.opts.serverUrl))) {
+      throw new InvalidTargetError('Requested resource does not match this MCP server');
+    }
     const brokerState = randomToken();
     const gitlabCodeVerifier = base64url(randomBytes(64));
 
@@ -277,7 +287,7 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
         clientState: params.state,
         clientCodeChallenge: params.codeChallenge,
         scopes: grantedScopes,
-        resource: params.resource?.toString(),
+        resource: new URL(this.opts.serverUrl).toString(),
         gitlabCodeVerifier,
       },
       AUTH_FLOW_TTL_MS

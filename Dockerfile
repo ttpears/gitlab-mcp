@@ -1,7 +1,7 @@
 # GitLab MCP Server — runtime image
 # Built from the repo's source. Push: ghcr.io/ttpears/gitlab-mcp.
 
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -13,7 +13,7 @@ RUN npm run build
 
 RUN npm prune --omit=dev
 
-FROM node:20-alpine AS runtime
+FROM node:24-alpine AS runtime
 RUN apk add --no-cache dumb-init wget
 WORKDIR /app
 

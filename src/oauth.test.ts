@@ -297,3 +297,34 @@ describe('GitLabOAuthProvider — full brokered code exchange', () => {
     p.dispose();
   });
 });
+
+
+describe('OAuth resource audience', () => {
+  it('rejects authorization for a different resource before redirecting', async () => {
+    const provider = new GitLabOAuthProvider(opts());
+    const res = fakeRes();
+    try {
+      await expect(provider.authorize(client, {
+        redirectUri: 'https://app.test/cb', codeChallenge: 'cc',
+        resource: new URL('https://other.example.com'),
+      }, res as any)).rejects.toThrow(/resource does not match/);
+      expect(res.redirectedTo).toBeUndefined();
+    } finally {
+      provider.dispose();
+    }
+  });
+
+  it('accepts the configured resource with a trailing slash', async () => {
+    const provider = new GitLabOAuthProvider(opts());
+    try {
+      const res = fakeRes();
+      await provider.authorize(client, {
+        redirectUri: 'https://app.test/cb', codeChallenge: 'cc',
+        resource: new URL('https://mcp.example.com/'),
+      }, res as any);
+      expect(res.redirectedTo).toContain('/oauth/authorize');
+    } finally {
+      provider.dispose();
+    }
+  });
+});
