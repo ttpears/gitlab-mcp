@@ -974,6 +974,190 @@ export class GitLabGraphQLClient {
     return id;
   }
 
+  /** GitLab Achievements are GraphQL-only and available when enabled on the instance. */
+  async listAchievements(
+    group: string,
+    options: { first?: number; after?: string; fetchAll?: boolean; includeRecipients?: boolean; ids?: string[] } = {},
+    userConfig?: UserConfig,
+  ): Promise<any> {
+    const first = options.first ?? 20;
+    const query = `
+      query ListAchievements($fullPath: ID!, $first: Int!, $after: String,
+        $ids: [AchievementsAchievementID!], $includeRecipients: Boolean!, $recipientPageSize: Int!) {
+        group(fullPath: $fullPath) {
+          achievements(first: $first, after: $after, ids: $ids) {
+            nodes {
+              id name description avatarUrl createdAt updatedAt
+              userAchievements(first: $recipientPageSize) @include(if: $includeRecipients) {
+                nodes { id createdAt revokedAt user { id username } }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }
+    `;
+    const variables = {
+      fullPath: group.trim(),
+      ids: options.ids?.map(id => this.achievementGid(id)),
+      includeRecipients: options.includeRecipients ?? false,
+      recipientPageSize: this.config.maxPageSize,
+    };
+    const nodes: any[] = [];
+    let after = options.after;
+    const cursors = new Set<string>();
+    if (after) cursors.add(after);
+    for (let page = 0; page < 100; page++) {
+      const result = await this.query(query, {
+        ...variables, first: Math.min(first - nodes.length, this.config.maxPageSize), after,
+      }, userConfig);
+      if (!result.group) throw new Error('Group not found or inaccessible');
+      const connection = result.group.achievements;
+      if (!connection) throw new Error('Achievements are unavailable on this GitLab instance');
+      if (!options.fetchAll) return connection;
+      nodes.push(...(connection.nodes ?? []));
+      if (!connection.pageInfo?.hasNextPage || nodes.length >= first) {
+        return { nodes, totalFetched: nodes.length, hasMore: !!connection.pageInfo?.hasNextPage, pageInfo: connection.pageInfo };
+      }
+      const cursor = connection.pageInfo.endCursor;
+      if (!cursor || cursors.has(cursor)) throw new Error('Achievement pagination did not advance');
+      cursors.add(cursor);
+      after = cursor;
+    }
+    throw new Error('Achievement scan reached its limit; continue with cursor pagination');
+  }
+
+  async createAchievement(
+    group: string, name: string, description?: string, userConfig?: UserConfig,
+  ): Promise<any> {
+    this.getClient(userConfig, true);
+    const groupId = await this.resolveGroupGid(group.trim(), userConfig);
+    if (!groupId) throw new Error('Group not found or inaccessible');
+    // The create mutation expects NamespaceID, while group.id is a GroupID.
+    const match = /^gid:\/\/gitlab\/(?:Group|Namespace)\/(\d+)$/.exec(groupId);
+    if (!match) throw new Error('GitLab returned an invalid group ID');
+    return this.mutateAchievement('Create', {
+      namespaceId: `gid://gitlab/Namespace/${match[1]}`, name: name.trim(), description,
+    }, userConfig);
+  }
+
+  async updateAchievement(
+    achievementId: string, changes: { name?: string; description?: string }, userConfig?: UserConfig,
+  ): Promise<any> {
+    if (changes.name === undefined && changes.description === undefined) {
+      throw new Error('Provide name or description to update an achievement');
+    }
+    return this.mutateAchievement('Update', {
+      achievementId: this.achievementGid(achievementId),
+      ...(changes.name !== undefined ? { name: changes.name.trim() } : {}),
+      ...(changes.description !== undefined ? { description: changes.description } : {}),
+    }, userConfig);
+  }
+
+  async deleteAchievement(achievementId: string, userConfig?: UserConfig): Promise<any> {
+    return this.mutateAchievement('Delete', { achievementId: this.achievementGid(achievementId) }, userConfig);
+  }
+
+  async awardAchievement(
+    achievementId: string, username: string, awardMessage?: string, userConfig?: UserConfig,
+  ): Promise<any> {
+    this.getClient(userConfig, true);
+    const id = this.achievementGid(achievementId);
+    const name = username.trim();
+    const result = await this.query<{ user: { id: string } | null }>(
+      'query AchievementRecipient($username: String!) { user(username: $username) { id } }',
+      { username: name }, userConfig,
+    );
+    if (!result.user) throw new Error(`User ${name} not found or inaccessible`);
+    return this.mutateAchievement('Award', { achievementId: id, userId: result.user.id, awardMessage }, userConfig);
+  }
+
+  async revokeAchievement(
+    options: { userAchievementId?: string; group?: string; achievementId?: string; username?: string },
+    userConfig?: UserConfig,
+  ): Promise<any> {
+    this.getClient(userConfig, true);
+    if (options.userAchievementId) {
+      if (options.group || options.achievementId || options.username) {
+        throw new Error('Provide either userAchievementId or group + achievementId + username, not both');
+      }
+      return this.mutateAchievement('Revoke', {
+        userAchievementId: this.achievementGid(options.userAchievementId, 'UserAchievement'),
+      }, userConfig);
+    }
+    if (!options.group || !options.achievementId || !options.username) {
+      throw new Error('Provide userAchievementId, or all of group, achievementId, and username');
+    }
+    const achievementId = this.achievementGid(options.achievementId);
+    const query = `
+      query AchievementRecipients($fullPath: ID!, $ids: [AchievementsAchievementID!]!, $first: Int!, $after: String) {
+        group(fullPath: $fullPath) {
+          achievements(ids: $ids, first: 1) {
+            nodes { userAchievements(first: $first, after: $after) {
+              nodes { id revokedAt user { username } }
+              pageInfo { hasNextPage endCursor }
+            } }
+          }
+        }
+      }
+    `;
+    let after: string | undefined;
+    const cursors = new Set<string>();
+    let matchedId: string | undefined;
+    for (let page = 0; page < 100; page++) {
+      const result = await this.query(query, {
+        fullPath: options.group.trim(), ids: [achievementId], first: this.config.maxPageSize, after,
+      }, userConfig);
+      const achievement = result.group?.achievements?.nodes?.[0];
+      if (!achievement) throw new Error('Achievement not found in the group or inaccessible');
+      const awards = achievement.userAchievements;
+      if (!awards) throw new Error('Achievement recipients are unavailable or inaccessible');
+      for (const award of awards.nodes ?? []) {
+        if (!award.revokedAt && award.user?.username?.toLowerCase() === options.username.trim().toLowerCase()) {
+          if (matchedId) throw new Error('Multiple active awards match this user; provide userAchievementId to select one');
+          matchedId = award.id;
+        }
+      }
+      if (!awards.pageInfo?.hasNextPage) {
+        if (!matchedId) throw new Error('No active award found for this user');
+        return this.mutateAchievement('Revoke', { userAchievementId: matchedId }, userConfig);
+      }
+      const cursor = awards.pageInfo.endCursor;
+      if (!cursor || cursors.has(cursor)) throw new Error('Recipient pagination did not advance; provide userAchievementId');
+      cursors.add(cursor);
+      after = cursor;
+    }
+    throw new Error('Recipient scan reached its limit; provide userAchievementId');
+  }
+
+  private achievementGid(id: string, type: 'Achievement' | 'UserAchievement' = 'Achievement'): string {
+    const value = id.trim();
+    const prefix = `gid://gitlab/Achievements::${type}/`;
+    const number = value.startsWith(prefix) ? value.slice(prefix.length) : value;
+    if (!/^[1-9]\d*$/.test(number)) throw new Error(`Expected a numeric ${type} ID or ${prefix}<id>`);
+    return prefix + number;
+  }
+
+  private async mutateAchievement(
+    action: 'Create' | 'Update' | 'Delete' | 'Award' | 'Revoke', input: Record<string, unknown>, userConfig?: UserConfig,
+  ): Promise<any> {
+    const field = `achievements${action}`;
+    const object = action === 'Award' || action === 'Revoke' ? 'userAchievement' : 'achievement';
+    const selection = object === 'achievement'
+      ? 'id name description avatarUrl'
+      : 'id createdAt revokedAt user { id username } achievement { id name }';
+    const result = await this.query(`
+      mutation ${field}($input: Achievements${action}Input!) {
+        ${field}(input: $input) { errors ${object} { ${selection} } }
+      }
+    `, { input }, userConfig, true);
+    const payload = result[field];
+    if (!payload) throw new Error(`${field} returned no result`);
+    if (payload.errors?.length) throw new Error(`${field} failed: ${payload.errors.join('; ')}`);
+    return payload;
+  }
+
   async getUserIdsByUsernames(usernames: string[], userConfig?: UserConfig): Promise<Record<string, string>> {
     const ids: Record<string, string> = {};
     if (!usernames || usernames.length === 0) return ids;
