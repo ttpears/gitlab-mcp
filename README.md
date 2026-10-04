@@ -379,6 +379,23 @@ Premium+Duo with semantic code search.
 | `get_available_queries` | Discover available GraphQL operations |
 | `execute_custom_query` | Run custom GraphQL queries |
 
+### Achievements
+
+GitLab Achievements are available on all tiers when enabled on the instance (introduced behind a feature flag in 15.10, enabled by default in 19.2, generally available in 19.3). Writes require a full-access token and group Maintainer/Owner permissions.
+
+| Tool | Description |
+|------|-------------|
+| `list_achievements` | List group achievements by cursor, optionally filter IDs and preview active recipients |
+| `create_achievement` | Create a named group achievement with an optional description |
+| `update_achievement` | Update name or description; an empty description clears it |
+| `delete_achievement` | Delete an achievement and all associated awards |
+| `award_achievement` | Award to an exact username with an optional message |
+| `revoke_achievement` | Revoke a specific award ID or look up a unique active award by group, achievement, and username |
+
+IDs can be numeric or GitLab global IDs. `list_achievements` uses `first`, `after`, and `fetchAll` as above; `fetchAll` stops at `first` items. `includeRecipients` adds one page of active awards per achievement with its own `pageInfo`; it does not fetch every recipient. Use the returned award ID (`userAchievementId`) for precise revocation. The username lookup scans recipient pages, stops with an explicit error if the scan limit is reached, and requires an award ID when multiple active awards match.
+
+GitLab may require recipient acceptance before an award appears on a profile and sends an award notification. Avatar uploads and user profile display/reordering are managed in GitLab. See [GitLab Achievements documentation](https://docs.gitlab.com/user/profile/achievements/) and the [GraphQL mutation reference](https://docs.gitlab.com/api/graphql/reference/#mutationachievementscreate).
+
 ### Write Operations (require user authentication)
 | Tool | Description |
 |------|-------------|

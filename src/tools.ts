@@ -2464,7 +2464,106 @@ const analyticsReviewBottlenecksTool: Tool = {
   },
 };
 
+const achievementCredentials = (input: any, userConfig?: UserConfig): UserConfig | undefined =>
+  input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
+
+const achievementIdSchema = z.string().trim().min(1)
+  .describe('Numeric achievement ID or gid://gitlab/Achievements::Achievement/<id>.');
+const achievementGroupSchema = z.string().trim().min(1)
+  .describe('Group full path, for example my-group/sub-group.');
+
+const listAchievementsTool: Tool = {
+  name: 'list_achievements',
+  title: 'List Achievements',
+  description: 'List group achievements with cursor pagination. Requires Achievements to be enabled on the GitLab instance. Optional recipient previews are a single page per achievement; each preview includes pageInfo.',
+  requiresAuth: false,
+  requiresWrite: false,
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    group: achievementGroupSchema,
+    ids: z.array(achievementIdSchema).min(1).max(100).optional().describe('Optional achievement IDs to filter.'),
+    first: z.number().int().min(1).max(100).default(20),
+    after: z.string().optional().describe('Previous pageInfo.endCursor; repeat until hasNextPage is false.'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages up to first items, not an exhaustive scan.'),
+    includeRecipients: z.boolean().default(false).describe('Include a page of active awards and recipient usernames for each achievement.'),
+  })),
+  handler: async (input, client, userConfig) => client.listAchievements(input.group, input, achievementCredentials(input, userConfig)),
+};
+
+const createAchievementTool: Tool = {
+  name: 'create_achievement',
+  title: 'Create Achievement',
+  description: 'Create a group achievement with name and optional description. Requires group Maintainer/Owner and enabled Achievements. Set avatars in GitLab UI; file uploads are not supported by this tool.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  inputSchema: withUserAuth(z.object({
+    group: achievementGroupSchema,
+    name: z.string().trim().min(1),
+    description: z.string().optional(),
+  })),
+  handler: async (input, client, userConfig) => client.createAchievement(input.group, input.name, input.description, achievementCredentials(input, userConfig)),
+};
+
+const updateAchievementTool: Tool = {
+  name: 'update_achievement',
+  title: 'Update Achievement',
+  description: 'Update an achievement name or description. Requires group Maintainer/Owner. Provide at least one changed field; an empty description clears it.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    achievementId: achievementIdSchema,
+    name: z.string().trim().min(1).optional(),
+    description: z.string().optional(),
+  })),
+  handler: async (input, client, userConfig) => client.updateAchievement(input.achievementId, { name: input.name, description: input.description }, achievementCredentials(input, userConfig)),
+};
+
+const deleteAchievementTool: Tool = {
+  name: 'delete_achievement',
+  title: 'Delete Achievement',
+  description: 'Delete a group achievement and every related awarded or revoked instance. Destructive; requires group Maintainer/Owner.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({ achievementId: achievementIdSchema })),
+  handler: async (input, client, userConfig) => client.deleteAchievement(input.achievementId, achievementCredentials(input, userConfig)),
+};
+
+const awardAchievementTool: Tool = {
+  name: 'award_achievement',
+  title: 'Award Achievement',
+  description: 'Award an achievement to a GitLab username. Multiple awards to the same user are allowed. Requires group Maintainer/Owner. GitLab notifies the recipient, who may need to accept before it appears on their profile.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  inputSchema: withUserAuth(z.object({
+    achievementId: achievementIdSchema,
+    username: z.string().trim().min(1),
+    awardMessage: z.string().optional().describe('Optional award message, supported on instances exposing this mutation field.'),
+  })),
+  handler: async (input, client, userConfig) => client.awardAchievement(input.achievementId, input.username, input.awardMessage, achievementCredentials(input, userConfig)),
+};
+
+const revokeAchievementTool: Tool = {
+  name: 'revoke_achievement',
+  title: 'Revoke Achievement',
+  description: 'Revoke one awarded achievement. Provide either userAchievementId, or group + achievementId + username. Username lookup scans recipient pages and rejects ambiguous repeated awards; use a specific userAchievementId in that case. Requires group Maintainer/Owner.',
+  requiresAuth: false,
+  requiresWrite: true,
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  inputSchema: withUserAuth(z.object({
+    userAchievementId: z.string().trim().min(1).optional().describe('Numeric award ID or gid://gitlab/Achievements::UserAchievement/<id>. This identifies one award, not the achievement definition.'),
+    group: achievementGroupSchema.optional(),
+    achievementId: achievementIdSchema.optional(),
+    username: z.string().trim().min(1).optional(),
+  })),
+  handler: async (input, client, userConfig) => client.revokeAchievement(input, achievementCredentials(input, userConfig)),
+};
+
 export const readOnlyTools: Tool[] = [
+  listAchievementsTool,
   getProjectTool,
   getIssuesTool,
   getMergeRequestsTool,
@@ -2501,6 +2600,11 @@ export const userAuthTools: Tool[] = [
 ];
 
 export const writeTools: Tool[] = [
+  createAchievementTool,
+  updateAchievementTool,
+  deleteAchievementTool,
+  awardAchievementTool,
+  revokeAchievementTool,
   executeRestWriteTool,
   createIssueTool,
   createMergeRequestTool,

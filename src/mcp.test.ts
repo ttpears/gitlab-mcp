@@ -78,6 +78,18 @@ describe('MCP tool calls', () => {
     expect(result.isError).toBeUndefined();
   });
 
+  it('routes achievement awards with per-call credentials and structured output', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ data: { user: { id: 'gid://gitlab/User/7' } } }), { headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { achievementsAward: { errors: [], userAchievement: { id: 'gid://gitlab/Achievements::UserAchievement/45' } } } }), { headers: { 'Content-Type': 'application/json' } }));
+    const result = await client.callTool({ name: 'award_achievement', arguments: {
+      achievementId: '12', username: 'alice', userCredentials: { accessToken: 'achievement-user' },
+    } });
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toEqual({ errors: [], userAchievement: { id: 'gid://gitlab/Achievements::UserAchievement/45' } });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new Headers(fetchMock.mock.calls[1][1]!.headers).get('authorization')).toBe('Bearer achievement-user');
+  });
+
   it('keeps unknown tools as protocol errors', async () => {
     await expect(client.callTool({ name: 'missing_tool', arguments: {} })).rejects.toThrow(/not found/);
   });

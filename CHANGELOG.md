@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Six structured GitLab Achievements tools: list, create, update, delete, award, and revoke. Support cursor pagination, optional recipient previews, exact username lookup, and numeric/global IDs (#51).
+- Revoke awards by a specific award ID, or by group + achievement + username. Username lookup scans recipient pages and refuses ambiguous repeated awards or incomplete scans. Writes use the standard credential resolution and reject read-only fallback tokens.
+
 ### Fixed
 - `execute_rest_write` now accepts JSON-encoded body strings without double-encoding them. Nested JSON object payloads are covered by an end-to-end regression test (#41).
 - Tool validation and execution failures return MCP `isError` results; unknown tool names remain protocol errors. Empty REST responses serialize as `null` instead of producing invalid text content.
