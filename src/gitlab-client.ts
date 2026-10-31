@@ -1,6 +1,8 @@
 import { GraphQLClient, gql, ClientError } from 'graphql-request';
 import { buildClientSchema, getIntrospectionQuery, IntrospectionQuery, parse } from 'graphql';
 import type { Config, UserConfig } from './config.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { fetchBuffered, retryAfterSeconds, abortableDelay } from './http.js';
 
 // GitLab-specific error types for better handling
 export interface GitLabGraphQLError {
@@ -78,17 +80,26 @@ export class Semaphore {
   private readonly waiters: Array<() => void> = [];
   constructor(private readonly max: number) {}
 
-  async acquire(): Promise<() => void> {
+  async acquire(signal?: AbortSignal): Promise<() => void> {
+    signal?.throwIfAborted();
     if (this.max <= 0) return () => {};
     if (this.active < this.max) {
       this.active++;
       return () => this.releaseOne();
     }
-    return new Promise<() => void>((resolve) => {
-      this.waiters.push(() => {
+    return new Promise<() => void>((resolve, reject) => {
+      const grant = () => {
+        signal?.removeEventListener('abort', cancel);
         this.active++;
         resolve(() => this.releaseOne());
-      });
+      };
+      const cancel = () => {
+        const index = this.waiters.indexOf(grant);
+        if (index !== -1) this.waiters.splice(index, 1);
+        reject(signal?.reason);
+      };
+      this.waiters.push(grant);
+      signal?.addEventListener('abort', cancel, { once: true });
     });
   }
 
@@ -116,6 +127,11 @@ export class GitLabGraphQLClient {
   // Soft cost guard: bounds concurrent in-flight requests to GitLab across all
   // tools/users. Excess requests queue (never rejected). 0 = unlimited.
   private requestGate: Semaphore;
+  private readonly requestSignal = new AsyncLocalStorage<AbortSignal>();
+
+  withRequestSignal<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    return this.requestSignal.run(signal, operation);
+  }
 
   constructor(config: Config) {
     this.config = config;
@@ -154,13 +170,12 @@ export class GitLabGraphQLClient {
    * held, so queued time doesn't eat into the timeout budget.
    */
   private async gatedFetch(url: string | URL, options: RequestInit, timeoutMs: number): Promise<Response> {
-    const release = await this.requestGate.acquire();
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    const signals = [options.signal, this.requestSignal.getStore()].filter((s): s is AbortSignal => !!s);
+    const signal = signals.length ? AbortSignal.any(signals) : undefined;
+    const release = await this.requestGate.acquire(signal);
     try {
-      return await fetch(url as any, { ...options, signal: controller.signal });
+      return await fetchBuffered(url, { ...options, signal }, timeoutMs);
     } finally {
-      clearTimeout(timeoutId);
       release();
     }
   }
@@ -169,6 +184,8 @@ export class GitLabGraphQLClient {
    * Parse GraphQL/HTTP errors into structured GitLabAPIError
    */
   private parseError(error: unknown): GitLabAPIError {
+    if (error instanceof GitLabAPIError) return error;
+
     // Handle ClientError from graphql-request (contains response details)
     if (error instanceof ClientError) {
       const response = error.response;
@@ -176,8 +193,7 @@ export class GitLabGraphQLClient {
       const errors = response.errors as GitLabGraphQLError[] | undefined;
       
       if (statusCode === 429) {
-        const retryAfterHeader = response.headers?.get('retry-after') || '60';
-        const retryAfter = parseInt(retryAfterHeader, 10);
+        const retryAfter = retryAfterSeconds(response.headers?.get('retry-after') ?? null) ?? 60;
         return new GitLabAPIError(
           `Rate limited by GitLab. Retry after ${retryAfter}s`,
           { code: 'RATE_LIMITED', statusCode, isRetryable: true, isRateLimited: true, retryAfter, originalError: error }
@@ -245,15 +261,15 @@ export class GitLabGraphQLClient {
 
     // Handle abort/timeout errors
     if (error instanceof Error) {
-      if (error.name === 'AbortError') {
+      if (error.name === 'TimeoutError') {
         return new GitLabAPIError(
-          'Request timed out. GitLab has a 30s server limit; try reducing query complexity.',
+          `Request timed out after ${this.config.defaultTimeout}ms; try reducing query complexity or pagination size.`,
           { code: 'TIMEOUT', isRetryable: true, originalError: error }
         );
       }
 
       // Network errors
-      const errorCode = (error as any).code;
+      const errorCode = (error as any).code ?? (error.cause as { code?: string } | undefined)?.code;
       if (errorCode && RETRY_CONFIG.retryableErrorCodes.includes(errorCode)) {
         return new GitLabAPIError(
           `Network error: ${error.message}`,
@@ -278,18 +294,21 @@ export class GitLabGraphQLClient {
    */
   private async executeWithRetry<T>(
     fn: () => Promise<T>,
-    context: string = 'GraphQL query'
+    context: string = 'GraphQL query',
+    allowRetry = true,
   ): Promise<T> {
     let lastError: GitLabAPIError | undefined;
 
     for (let attempt = 0; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
       try {
+        this.requestSignal.getStore()?.throwIfAborted();
         return await fn();
       } catch (error) {
+        this.requestSignal.getStore()?.throwIfAborted();
         lastError = this.parseError(error);
 
         // Don't retry non-retryable errors
-        if (!lastError.isRetryable) {
+        if (!allowRetry || !lastError.isRetryable) {
           throw lastError;
         }
 
@@ -303,7 +322,7 @@ export class GitLabGraphQLClient {
 
         // Calculate delay with exponential backoff and jitter
         let delay: number;
-        if (lastError.isRateLimited && lastError.retryAfter) {
+        if (lastError.isRateLimited && lastError.retryAfter !== undefined) {
           delay = lastError.retryAfter * 1000;
         } else {
           delay = Math.min(
@@ -316,7 +335,7 @@ export class GitLabGraphQLClient {
           `[GitLab] ${context} failed (attempt ${attempt + 1}/${RETRY_CONFIG.maxRetries + 1}): ${lastError.code}. Retrying in ${Math.round(delay / 1000)}s...`
         );
 
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await abortableDelay(delay, this.requestSignal.getStore());
       }
     }
 
@@ -417,10 +436,12 @@ export class GitLabGraphQLClient {
   }
 
   async query<T = any>(query: string, variables?: any, userConfig?: UserConfig, requiresWrite = false): Promise<T> {
-    const client = this.getClient(userConfig, requiresWrite);
+    const isWrite = requiresWrite || this.documentHasMutation(query);
+    const client = this.getClient(userConfig, isWrite);
     return this.executeWithRetry(
       () => client.request<T>(query, variables),
-      'GraphQL query'
+      isWrite ? 'GraphQL mutation' : 'GraphQL query',
+      !isWrite,
     );
   }
 
@@ -464,12 +485,14 @@ export class GitLabGraphQLClient {
       maxItems?: number;
       pageSize?: number;
       userConfig?: UserConfig;
+      after?: string;
     } = {}
   ): Promise<PaginatedResult<T>> {
     const maxItems = options.maxItems ?? 100;
     const pageSize = Math.min(options.pageSize ?? 50, this.config.maxPageSize);
     const allNodes: T[] = [];
-    let after: string | undefined = undefined;
+    let after: string | undefined = options.after;
+    const seenCursors = new Set<string>(after ? [after] : []);
     let lastPageInfo: PageInfo = { hasNextPage: false, hasPreviousPage: false, startCursor: null, endCursor: null };
 
     while (allNodes.length < maxItems) {
@@ -480,8 +503,8 @@ export class GitLabGraphQLClient {
 
       // Navigate to the connection using the dot-separated path
       const connection = connectionPath.split('.').reduce((obj: any, key: string) => obj?.[key], result);
-      if (!connection || !connection.nodes) {
-        break;
+      if (!connection || !Array.isArray(connection.nodes) || !connection.pageInfo) {
+        throw new Error(`GitLab pagination connection ${connectionPath} is missing or inaccessible`);
       }
 
       allNodes.push(...connection.nodes);
@@ -492,6 +515,10 @@ export class GitLabGraphQLClient {
       }
 
       after = lastPageInfo.endCursor ?? undefined;
+      if (!after || seenCursors.has(after)) {
+        throw new Error(`GitLab pagination cursor did not advance for ${connectionPath}`);
+      }
+      seenCursors.add(after);
     }
 
     return {
@@ -570,6 +597,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -602,6 +630,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -637,6 +666,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -747,6 +777,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -1415,7 +1446,7 @@ export class GitLabGraphQLClient {
     }, userConfig);
   }
 
-  async globalSearchAll(searchTerm?: string, maxItems: number = 100, userConfig?: UserConfig): Promise<{
+  async globalSearchAll(searchTerm?: string, maxItems: number = 100, userConfig?: UserConfig, after?: string): Promise<{
     projects: PaginatedResult<any>;
     issues: PaginatedResult<any>;
   }> {
@@ -1436,8 +1467,8 @@ export class GitLabGraphQLClient {
       }
     `;
     const [projects, issues] = await Promise.all([
-      this.fetchAllPages(projectsQuery, { search: searchTerm || undefined }, 'projects', { maxItems, userConfig }),
-      this.fetchAllPages(issuesQuery, { search: searchTerm || undefined }, 'issues', { maxItems, userConfig }),
+      this.fetchAllPages(projectsQuery, { search: searchTerm || undefined }, 'projects', { maxItems, userConfig, after }),
+      this.fetchAllPages(issuesQuery, { search: searchTerm || undefined }, 'issues', { maxItems, userConfig, after }),
     ]);
     return { projects, issues };
   }
@@ -1465,6 +1496,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -1543,6 +1575,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -1605,6 +1638,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -1666,6 +1700,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -1735,6 +1770,7 @@ export class GitLabGraphQLClient {
               maxItems: first,
               pageSize: this.config.maxPageSize,
               userConfig,
+              after,
             });
           }
 
@@ -1757,7 +1793,7 @@ export class GitLabGraphQLClient {
 
       // If not a username search or user query failed, return helpful error
       return {
-        pageInfo: { hasNextPage: false, hasPreviousPage: false },
+        pageInfo: { hasNextPage: false, hasPreviousPage: false, endCursor: null, startCursor: null },
         nodes: [],
         _note: `GitLab does not support global text searches for merge requests. Please either: (1) provide a projectPath for text search, or (2) search by username (e.g., "cdhanlon", "author:cdhanlon", "assignee:cdhanlon").`
       };
@@ -1929,6 +1965,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -1963,6 +2000,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -2022,6 +2060,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -2078,6 +2117,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -2217,6 +2257,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -2261,6 +2302,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -2297,6 +2339,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -2480,6 +2523,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -2511,6 +2555,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -2571,6 +2616,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -2795,6 +2841,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after,
       });
     }
 
@@ -2841,6 +2888,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -2869,6 +2917,7 @@ export class GitLabGraphQLClient {
           maxItems: first,
           pageSize: this.config.maxPageSize,
           userConfig,
+          after,
         });
       }
 
@@ -3138,6 +3187,7 @@ export class GitLabGraphQLClient {
         maxItems: first,
         pageSize: this.config.maxPageSize,
         userConfig,
+        after: params.after,
       });
       return warnings.length > 0 ? { ...result, _warning: warnings.join('; ') } : result;
     }
@@ -3346,16 +3396,18 @@ export class GitLabGraphQLClient {
         }
         const retryable = RETRY_CONFIG.retryableStatusCodes.includes(statusCode);
         throw new GitLabAPIError(`GitLab REST ${method} ${path} failed (${statusCode}): ${message}`, {
-          code: statusCode === 401 ? 'AUTH_FAILED' : statusCode === 403 ? 'FORBIDDEN' : 'HTTP_ERROR',
+          code: statusCode === 401 ? 'AUTH_FAILED' : statusCode === 403 ? 'FORBIDDEN' : statusCode === 429 ? 'RATE_LIMITED' : 'HTTP_ERROR',
           statusCode,
           isRetryable: retryable,
+          isRateLimited: statusCode === 429,
+          retryAfter: retryAfterSeconds(response.headers.get('retry-after')),
         });
       }
 
       if (response.status === 204) return undefined as unknown as T;
       const text = await response.text();
       return (text ? JSON.parse(text) : undefined) as T;
-    }, `REST ${method} ${path}`);
+    }, `REST ${method} ${path}`, method === 'GET');
   }
 
   /**

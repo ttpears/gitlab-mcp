@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-31
+
+### Breaking changes
+- Require Node.js 22 or later (the published 2.2.4 package supported older runtimes). Docker uses Node.js 24 LTS.
+- HTTP sessions are bound to the bearer credential used at initialization. Every request must carry that credential; changing or removing it returns HTTP 404 and requires reinitialization, including after OAuth refresh.
+- Automatically retry reads only. GraphQL mutations and REST writes are sent once to avoid duplicate side effects after ambiguous network/server failures.
+
+### Fixed
+- Keep full GraphQL/REST response-body reads inside the request deadline and concurrency slot. Preserve timeout causes and propagate MCP cancellation through in-flight requests, queues, and retry backoff.
+- Preserve structured REST errors, including status and retryability; honor numeric and HTTP-date `Retry-After` values and recognize native fetch network error causes.
+- Bounded pagination honors its starting cursor, fails on missing connections or non-advancing cursors, and preserves continuation metadata.
+- Handle SIGTERM as well as SIGINT, closing sessions and the HTTP listener before exiting.
+- Refresh production dependencies and their lockfile to resolve the five audited vulnerable packages, including body-parser and Zod.
+
+### Added
+- Output schemas and runtime output validation for ten common project, user, issue, and merge-request tools, preserving their existing result shapes and additional fields.
+- Real HTTP regression coverage for slow bodies, concurrency, cancellation, session isolation, credential rotation, termination, and output-schema discovery; retry, pagination, and GraphQL schema compatibility regressions.
+- Weekly Dependabot checks for npm, GitHub Actions, and Docker. CI checks production advisories, release metadata consistency, and MCPB packaging; fork PRs skip privileged preview-image publishing.
+
+### Changed
+- Synchronize npm, lockfile, Claude plugin, changelog, and deployment examples for 3.0.0; replace the obsolete Compose build/credential example with the published image and current auth settings.
+
 ### Added
 - Six structured GitLab Achievements tools: list, create, update, delete, award, and revoke. Support cursor pagination, optional recipient previews, exact username lookup, and numeric/global IDs (#51).
 - Revoke awards by a specific award ID, or by group + achievement + username. Username lookup scans recipient pages and refuses ambiguous repeated awards or incomplete scans. Writes use the standard credential resolution and reject read-only fallback tokens.

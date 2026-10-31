@@ -60,9 +60,24 @@ const withUserAuth = (baseSchema: z.ZodObject<any>, required = false) => {
   }
 };
 
+// Stable fields shared across supported GitLab GraphQL schemas. Extra fields are
+// preserved so declaring a contract does not remove useful instance-specific data.
+const UserOutput = z.looseObject({ id: z.string(), username: z.string(), name: z.string() });
+const ProjectOutput = z.looseObject({ id: z.string(), name: z.string(), fullPath: z.string(), webUrl: z.string() });
+const IssueOutput = z.looseObject({ id: z.string(), iid: z.string(), title: z.string(), webUrl: z.string() });
+const PageInfoOutput = z.looseObject({
+  hasNextPage: z.boolean(), endCursor: z.string().nullable(),
+  hasPreviousPage: z.boolean().optional(), startCursor: z.string().nullable().optional(),
+});
+const connectionOutput = (node: z.ZodType) => z.looseObject({
+  nodes: z.array(node), pageInfo: PageInfoOutput,
+  totalFetched: z.number().int().nonnegative().optional(), hasMore: z.boolean().optional(),
+});
+
 // Read-only tools (can use the configured env token)
 const getCurrentUserTool: Tool = {
   name: 'get_current_user',
+  outputSchema: UserOutput,
   title: 'Current User',
   description: 'Get information about the current authenticated GitLab user',
   requiresAuth: true,
@@ -82,6 +97,7 @@ const getCurrentUserTool: Tool = {
 
 const getProjectTool: Tool = {
   name: 'get_project',
+  outputSchema: ProjectOutput,
   title: 'Project Details',
   description: 'Get detailed information about a specific GitLab project (read-only)',
   requiresAuth: false,
@@ -103,6 +119,7 @@ const getProjectTool: Tool = {
 
 const getProjectsTool: Tool = {
   name: 'get_projects',
+  outputSchema: connectionOutput(ProjectOutput),
   title: 'List Projects',
   description: 'List projects accessible to the user (requires authentication to see private projects)',
   requiresAuth: true,
@@ -130,6 +147,7 @@ const getProjectsTool: Tool = {
 
 const getIssuesTool: Tool = {
   name: 'get_issues',
+  outputSchema: connectionOutput(IssueOutput),
   title: 'Project Issues',
   description: 'Get issues from a specific GitLab project (read-only)',
   requiresAuth: false,
@@ -161,6 +179,7 @@ const getIssuesTool: Tool = {
 
 const getMergeRequestsTool: Tool = {
   name: 'get_merge_requests',
+  outputSchema: connectionOutput(IssueOutput),
   title: 'Merge Requests',
   description: 'Get merge requests from a specific GitLab project (read-only)',
   requiresAuth: false,
@@ -193,6 +212,7 @@ const getMergeRequestsTool: Tool = {
 // Write operations (require user authentication)
 const createIssueTool: Tool = {
   name: 'create_issue',
+  outputSchema: IssueOutput,
   title: 'Create Issue',
   description: 'Create a new issue in a GitLab project (requires user authentication with write permissions)',
   requiresAuth: true,
@@ -220,6 +240,7 @@ const createIssueTool: Tool = {
 
 const createMergeRequestTool: Tool = {
   name: 'create_merge_request',
+  outputSchema: IssueOutput,
   title: 'Create Merge Request',
   description: 'Create a new merge request in a GitLab project (requires user authentication with write permissions)',
   requiresAuth: true,
@@ -542,13 +563,13 @@ const globalSearchTool: Tool = {
     searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term (leave empty for recent activity)'),
     first: z.number().min(1).max(100).default(20).describe('Number of results to retrieve per category'),
     after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
-    fetchAll: z.boolean().default(false).describe('Fetch multiple pages per category in one call, up to ~100 items each — NOT exhaustive. For complete results, leave this false and paginate via after (pageInfo.endCursor).'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages per category up to first items each (default 20, max 100), starting at after — NOT exhaustive. Each category returns its own pageInfo. Use search_projects and search_issues to continue those categories independently.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
 
     if (input.fetchAll) {
-      const result = await client.globalSearchAll(input.searchTerm, undefined, credentials);
+      const result = await client.globalSearchAll(input.searchTerm, input.first, credentials, input.after);
       return {
         searchTerm: input.searchTerm,
         projects: result.projects,
@@ -570,6 +591,7 @@ const globalSearchTool: Tool = {
 
 const searchProjectsTool: Tool = {
   name: 'search_projects',
+  outputSchema: connectionOutput(ProjectOutput),
   title: 'Search Projects',
   description: 'Search for GitLab projects by name or description',
   requiresAuth: false,
@@ -600,6 +622,7 @@ const searchProjectsTool: Tool = {
 
 const searchIssuesTool: Tool = {
   name: 'search_issues',
+  outputSchema: connectionOutput(IssueOutput),
   title: 'Search Issues',
   description: 'Search for issues with text search and/or structured filtering (assignee, author, labels, state). For filtering by assignee/author/labels without text search, leave searchTerm empty.',
   requiresAuth: false,
@@ -665,6 +688,7 @@ const searchIssuesTool: Tool = {
 
 const searchMergeRequestsTool: Tool = {
   name: 'search_merge_requests',
+  outputSchema: connectionOutput(IssueOutput),
   title: 'Search Merge Requests',
   description: 'Search merge requests by username (supports "username", "author:username", "assignee:username") or search within a specific project. Note: GitLab does not support global text search for MRs - use projectPath for text searches.',
   requiresAuth: false,

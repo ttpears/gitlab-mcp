@@ -30,6 +30,28 @@ Field notes: [Two session bugs that broke my GitLab MCP server](https://hackyour
 
 ## Solo IDE
 
+### Upgrading to 3.0
+
+Use Node.js 22 or later for npm/stdio installations. The container includes Node.js
+24. Update pinned images to `ghcr.io/ttpears/gitlab-mcp:3.0.0` and reconnect MCP
+clients after deployment. This release includes the previously unreleased
+Achievements tools and MCP/OAuth fixes listed in the changelog.
+
+HTTP clients must send the same bearer credential on every request in a session.
+A changed or omitted credential returns HTTP 404; reinitialize after rotating a
+PAT or refreshing an OAuth token. A session ID alone never grants access to the
+credential stored in that session.
+
+Read requests retry transient failures and honor `Retry-After`. Writes are sent
+once: if a response is lost, check GitLab before repeating the operation, because
+the write may already have succeeded. `GITLAB_TIMEOUT` covers response headers
+and the complete body, and MCP cancellation aborts queued/in-flight work.
+
+`fetchAll` remains bounded by `first`. It now honors `after`, so bounded scans can
+continue from the previous result's `pageInfo.endCursor`; check `hasMore` before
+claiming complete results. Missing connections or non-advancing cursors return
+an explicit error instead of misleading counts.
+
 ### Claude Code (recommended)
 
 ```bash
@@ -127,7 +149,7 @@ Use `https://gitlab.com` for SaaS GitLab; use your own host for self-hosted.
 ```yaml
 services:
   gitlab-mcp:
-    image: ghcr.io/ttpears/gitlab-mcp:1.14.0
+    image: ghcr.io/ttpears/gitlab-mcp:3.0.0
     env_file:
       - .env
     networks:
@@ -191,7 +213,7 @@ as writes are gated on the user's token.
      -p 8008:8008 \
      -e GITLAB_URL=https://gitlab.example.com \
      --name gitlab-mcp \
-     ghcr.io/ttpears/gitlab-mcp:1.14.0
+     ghcr.io/ttpears/gitlab-mcp:3.0.0
    ```
 
    Or, when running alongside LibreChat in the same compose project, drop it
@@ -200,7 +222,7 @@ as writes are gated on the user's token.
    ```yaml
    services:
      gitlab-mcp:
-       image: ghcr.io/ttpears/gitlab-mcp:1.14.0
+       image: ghcr.io/ttpears/gitlab-mcp:3.0.0
        environment:
          GITLAB_URL: https://gitlab.example.com
        networks:
