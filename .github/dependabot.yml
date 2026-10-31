@@ -4,6 +4,14 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # Keep runtime typings aligned with the Node 22/24 support matrix.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # graphql-request 7 declares graphql 14-16 as peers. Revisit alongside
+      # a client upgrade that supports GraphQL 17; do not bypass peer checks.
+      - dependency-name: graphql
+        update-types: ['version-update:semver-major']
     groups:
       production:
         dependency-type: production
@@ -22,3 +30,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The production image stays on Node 24 LTS until a tested runtime migration.
+      # Minor/patch base-image updates remain eligible.
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
