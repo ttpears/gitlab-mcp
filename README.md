@@ -1,563 +1,100 @@
 # GitLab MCP Server
 
 [![npm version](https://img.shields.io/npm/v/@ttpears/gitlab-mcp-server)](https://www.npmjs.com/package/@ttpears/gitlab-mcp-server)
-[![npm downloads](https://img.shields.io/npm/dm/@ttpears/gitlab-mcp-server)](https://www.npmjs.com/package/@ttpears/gitlab-mcp-server)
 [![CI](https://github.com/ttpears/gitlab-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ttpears/gitlab-mcp/actions/workflows/ci.yml)
-[![Container](https://img.shields.io/badge/ghcr.io-ttpears%2Fgitlab--mcp-2496ED?logo=docker&logoColor=white)](https://github.com/ttpears/gitlab-mcp/pkgs/container/gitlab-mcp)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-<img src="assets/logo.svg" width="80" align="right" alt="gitlab-mcp"/>
+A community [Model Context Protocol](https://modelcontextprotocol.io/) server that lets AI clients search GitLab, read repositories, review merge requests, manage issues, and summarize team activity. Supports GitLab.com and self-managed GitLab through **stdio** and **Streamable HTTP**.
 
-A community MCP server for GitLab — works with **any GitLab tier** (Free, Premium, Ultimate), no GitLab Duo required. PAT-based auth. Streamable HTTP and stdio transports.
+This project is independent of GitLab Inc. It does not require GitLab Duo. Individual tools remain subject to your GitLab version, tier, enabled features, token scopes, and role.
 
-```bash
-npx @ttpears/gitlab-mcp-server
-```
+## Start locally
 
-Field notes: [Two session bugs that broke my GitLab MCP server](https://hackyourworld.com/gitlab-mcp-session-bugs-restart-404/) explains the recursive close callback and stale HTTP session behavior behind the current lifecycle handling.
+Requires **Node.js 22 or later**. CI covers Node.js 22 and 24; the container uses Node.js 24.
 
----
-
-## Choose your deployment
-
-| You're running | Go to |
-|---|---|
-| Claude Code or another IDE/AI tool, just for you | [Solo IDE](#solo-ide) |
-| LibreChat for a team with a service-account read token | [LibreChat — service-account reads](#librechat--service-account-reads) |
-| LibreChat where every operation should use the calling user's token | [LibreChat — strict per-user](#librechat--strict-per-user) |
-
----
-
-## Solo IDE
-
-### Upgrading to 4.0
-
-Use Node.js 22 or later for npm/stdio installations. The container includes Node.js
-24. Update pinned images to `ghcr.io/ttpears/gitlab-mcp:4.0.0` and reconnect MCP
-clients after deployment.
-
-OAuth users must sign in again after upgrading. After GitLab login, approve the
-specific MCP application and its exact redirect URI on the server's consent page.
-Codes and refresh tokens are single-use; logout revokes the associated token
-family. Group restrictions are rechecked at refresh, and token families require
-a fresh sign-in after 30 days. If GitLab or the group lookup fails during refresh,
-the server fails closed and requires a new sign-in.
-
-**Redis deployments:** set `OAUTH_STORAGE_ENCRYPTION_KEY` to a secret containing
-64 hexadecimal characters (32 random bytes); generate one with
-`openssl rand -hex 32` and store it in your secret manager. Every replica for the
-same issuer must use the same key. Use `rediss://` for TLS. Plain `redis://` is
-accepted for loopback, or with `REDIS_ALLOW_INSECURE=true` for an explicitly trusted
-private network; values remain encrypted in either case. Give this service a
-dedicated Redis ACL/namespace and a memory quota with `noeviction`. The new `v4`
-namespace intentionally does not read old plaintext OAuth state. Stop all v3
-replicas and remove only that issuer's old OAuth namespace before starting v4;
-otherwise old plaintext credentials remain until their TTL expires. Do not flush
-a shared Redis database. Rotating the
-encryption key requires a fresh `REDIS_KEY_PREFIX` and client reconnection.
-
-HTTP hosting now has finite session, request, and queue limits. Excess HTTP work
-returns 429 with `Retry-After`; queue overflow/wait expiry is a tool error. GitLab
-response bodies are limited to 16 MiB after decompression. Tune the settings below
-for large instances, and set `TRUST_PROXY` only to your actual proxy hops/subnets
-so per-IP limits use the real caller. OAuth in-memory state is capped at 10,000
-records; use a protected Redis store for larger persistent deployments.
-
-HTTP clients must send the same bearer credential on every request in a session.
-A changed or omitted credential returns HTTP 404; reinitialize after rotating a
-PAT or refreshing an OAuth token. A session ID alone never grants access to the
-credential stored in that session.
-
-Read requests retry transient failures and honor `Retry-After`. Writes are sent
-once: if a response is lost, check GitLab before repeating the operation, because
-the write may already have succeeded. `GITLAB_TIMEOUT` covers response headers
-and the complete body, and MCP cancellation aborts queued/in-flight work.
-
-`fetchAll` remains bounded by `first`. It now honors `after`, so bounded scans can
-continue from the previous result's `pageInfo.endCursor`; check `hasMore` before
-claiming complete results. Missing connections or non-advancing cursors return
-an explicit error instead of misleading counts.
-
-### Claude Code (recommended)
-
-```bash
-claude mcp add gitlab \
-  --env GITLAB_URL=https://gitlab.com \
-  --env GITLAB_TOKEN=glpat-your-pat \
-  -- npx -y @ttpears/gitlab-mcp-server
-```
-
-`--scope` controls where the configuration lives:
-
-- `--scope local` (default) — only this user, only this project
-- `--scope user` — shared across all of your projects
-- `--scope project` — written to `.mcp.json` in the project root, intended for team check-in
-
-For team check-in, use a `${VAR}` placeholder so the PAT itself stays out of git:
+1. Create a GitLab personal access token with `read_api` for reads or `api` for reads and writes. The token can only access resources its owner is allowed to use.
+2. Add this server to your client's MCP configuration. Replace the token locally; keep the resulting file out of version control.
 
 ```json
 {
   "mcpServers": {
     "gitlab": {
       "command": "npx",
-      "args": ["-y", "@ttpears/gitlab-mcp-server"],
+      "args": ["-y", "@ttpears/gitlab-mcp-server@4.0.0"],
       "env": {
         "GITLAB_URL": "https://gitlab.com",
-        "GITLAB_TOKEN": "${GITLAB_TOKEN}"
+        "GITLAB_READ_TOKEN": "glpat-replace-locally"
       }
     }
   }
 }
 ```
 
-Each contributor exports `GITLAB_TOKEN` in their shell; Claude Code expands it on launch.
+3. Restart or reconnect the client. Ask it to call `get_current_user`, then `search_projects` with `{"searchTerm":"your-project","first":5}`.
 
-### Cold start
+For writes, **replace** `GITLAB_READ_TOKEN` with `GITLAB_TOKEN` and use an `api`-scoped token. Setting both variables is a startup error. Stdio is the default; it communicates over stdin/stdout and does not open a listening port.
 
-If launching via `npx` adds noticeable latency, install once:
+## Choose a setup
 
-```bash
-npm install -g @ttpears/gitlab-mcp-server
-```
+| Use case | Setup |
+| --- | --- |
+| Claude Code, Claude Desktop, VS Code, or another local client | [Client installation](docs/installation.md) |
+| Claude Desktop bundle | Download `gitlab-mcp-community-4.0.0.mcpb` from the [4.0.0 release](https://github.com/ttpears/gitlab-mcp/releases/tag/v4.0.0) |
+| LibreChat with each user's PAT | [LibreChat guide](docs/installation.md#librechat) and [YAML example](librechat.example.yml) |
+| Shared remote server with GitLab sign-in | [OAuth setup](docs/authentication.md#oauth-for-remote-users) |
+| Docker or a reverse proxy | [Deployment and operations](docs/deployment.md) |
+| Existing installation | [Upgrade to 4.0](docs/upgrading.md) |
 
-…and replace `npx -y @ttpears/gitlab-mcp-server` with `gitlab-mcp-server` in your config.
-
-### Claude Desktop
-
-**Option A — MCPB one-click install:** download
-`gitlab-mcp-community-${VERSION}.mcpb` from the
-[latest GitHub Release](https://github.com/ttpears/gitlab-mcp/releases/latest)
-and drag it onto the Claude Desktop window. Fill in your GitLab URL and a
-Personal Access Token when prompted; the token is stored in your OS keychain.
-Use a `read_api`-scoped PAT for read-only access, or an `api`-scoped PAT to
-also allow writes (create_issue, create_merge_request, etc.).
-
-**Option B — manual config:** add to `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "gitlab": {
-      "command": "npx",
-      "args": ["-y", "@ttpears/gitlab-mcp-server"],
-      "env": {
-        "GITLAB_URL": "https://gitlab.com",
-        "GITLAB_TOKEN": "glpat-your-pat"
-      }
-    }
-  }
-}
-```
-
----
-
-## LibreChat — service-account reads
-
-A read-only service token covers reads (so anyone in the workspace can ask
-questions). Each user supplies their own PAT for writes through LibreChat's
-`customUserVars`.
-
-LibreChat's documented extension point is `docker-compose.override.yml` — the
-fragments below assume you're adding `gitlab-mcp` there alongside LibreChat's
-own `api`, `mongodb`, etc.
-
-### `.env`
-
-```env
-GITLAB_URL=https://gitlab.example.com
-GITLAB_READ_TOKEN=glpat-readonly-service-token   # read_api scope only
-```
-
-Use `https://gitlab.com` for SaaS GitLab; use your own host for self-hosted.
-
-### `docker-compose.override.yml`
-
-```yaml
-services:
-  gitlab-mcp:
-    image: ghcr.io/ttpears/gitlab-mcp:4.0.0
-    env_file:
-      - .env
-    networks:
-      - librechat
-    restart: unless-stopped
-```
-
-`env_file` reads `GITLAB_URL` and `GITLAB_READ_TOKEN` from `.env`. No port
-mapping needed — LibreChat's `api` container reaches `gitlab-mcp` over the
-shared `librechat` network. Add `ports: ["8008:8008"]` only if you need to
-hit it from the host (e.g. for `curl http://localhost:8008/health`).
-
-Then:
+For a local HTTP smoke test without a shared token:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.override.yml up -d gitlab-mcp api
+docker run --rm --name gitlab-mcp \
+  -p 127.0.0.1:8008:8008 \
+  -e GITLAB_URL=https://gitlab.com \
+  ghcr.io/ttpears/gitlab-mcp:4.0.0
 ```
 
-`api` is restarted alongside so it re-reads `librechat.yaml`.
+Connect an MCP client to `http://localhost:8008/` and send `Authorization: Bearer <your-GitLab-PAT>` on every request. `curl http://localhost:8008/health` checks liveness. The published image currently targets Linux **amd64**. Configure HTTPS and user authentication before remote use; see the deployment guide.
 
-### `librechat.yaml`
+## What you can do
 
-```yaml
-mcpServers:
-  gitlab:
-    type: streamable-http
-    url: http://gitlab-mcp:8008/
-    startup: false                # don't connect until the user supplies their PAT
-    initTimeout: 30000
-    timeout: 120000
-    headers:
-      Authorization: "Bearer {{GITLAB_PAT}}"
-      X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"   # only honored when GITLAB_PIN_HOST=false (default pins to GITLAB_URL)
-    customUserVars:
-      GITLAB_PAT:
-        title: "GitLab Personal Access Token"
-        description: "Your GitLab PAT with api scope. Used for issues, MRs, and comments you create or edit."
-      GITLAB_URL_OVERRIDE:
-        title: "GitLab URL (optional)"
-        description: "Leave blank to use the workspace default. Override only if your account is on a different GitLab instance."
-```
+The server exposes **69 tools** and **8 workflow prompts**. The [tool reference](docs/reference/tools.md) lists every tool, its input parameters, defaults, and write classification.
 
-`initTimeout` / `timeout` are forgiving defaults for slower internal networks
-and large schemas — drop them if SaaS GitLab feels snappy.
+| Task | Start with |
+| --- | --- |
+| Find projects, groups, users, issues, or merge requests | `search_projects`, `search_groups`, `search_users`, `search_issues`, `search_merge_requests` |
+| Identify a path and inspect code | `resolve_path`, `browse_repository`, `get_file_content` |
+| Review a change and its CI results | `get_merge_request_context`, `get_merge_request_diffs`, `get_merge_request_pipelines`, `get_pipeline_jobs` |
+| Triage and update work | `get_issue_context`, `create_issue`, `update_issue`, `create_note`, `update_merge_request` |
+| Work with planning and notifications | `list_milestones`, `list_iterations`, `list_work_items`, `list_my_todos` |
+| Summarize activity and review delays | `analytics_user_summary`, `analytics_group_summary`, `analytics_review_bottlenecks` |
+| Manage group achievements | `list_achievements`, `create_achievement`, `award_achievement` |
+| Discover instance-specific API capabilities | `get_available_queries`, `get_type_fields` |
 
-> Server-side env vars use `${VAR}`. Per-user vars use `{{VAR}}`. They are not interchangeable.
+Try: “Find open bugs assigned to me,” “Review MR !42 in group/project,” or “Summarize this group's activity since Monday.” See [workflows and pagination](docs/usage.md) for exact tool-call examples and prompt names.
 
----
+## Read before sharing a server
 
-## LibreChat — strict per-user
+- `GITLAB_TOKEN` is a fallback for **reads and writes**. `GITLAB_READ_TOKEN` is a fallback for **reads only**. A shared fallback exposes that account's accessible data to callers using it.
+- With neither fallback set, each operation needs user credentials through an HTTP PAT, OAuth, or `userCredentials`.
+- Host pinning, finite resource limits, and restrictions on custom GraphQL/REST tools are enabled by default. Tool annotations are client hints; GitLab permissions and the server's credential checks enforce access.
+- `fetchAll: true` fetches up to `first` items. For complete results, keep following each connection's `pageInfo.endCursor` while `hasNextPage` is true.
 
-Every call must carry a user PAT. No service-account fallback. Reads as well
-as writes are gated on the user's token.
+See [authentication and security](docs/authentication.md) for credential precedence, OAuth consent, encrypted Redis storage, and access boundaries.
 
-### Add MCP Server (UI path — recommended)
+## Documentation
 
-1. Host gitlab-mcp somewhere LibreChat can reach. For a quick standalone host:
+- [Installation and client configuration](docs/installation.md)
+- [Authentication and security](docs/authentication.md)
+- [Deployment and operations](docs/deployment.md)
+- [Workflows, results, and pagination](docs/usage.md)
+- [Environment variable reference](docs/configuration.md)
+- [Complete tool reference](docs/reference/tools.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Upgrading to 4.0](docs/upgrading.md)
+- [Contributing and architecture](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md) · [Releases](https://github.com/ttpears/gitlab-mcp/releases) · [Issue tracker](https://github.com/ttpears/gitlab-mcp/issues)
 
-   ```bash
-   docker run -d --restart unless-stopped \
-     -p 8008:8008 \
-     -e GITLAB_URL=https://gitlab.example.com \
-     --name gitlab-mcp \
-     ghcr.io/ttpears/gitlab-mcp:4.0.0
-   ```
+Field notes: [Two session bugs that broke my GitLab MCP server](https://hackyourworld.com/gitlab-mcp-session-bugs-restart-404/).
 
-   Or, when running alongside LibreChat in the same compose project, drop it
-   into `docker-compose.override.yml` (no token env vars):
-
-   ```yaml
-   services:
-     gitlab-mcp:
-       image: ghcr.io/ttpears/gitlab-mcp:4.0.0
-       environment:
-         GITLAB_URL: https://gitlab.example.com
-       networks:
-         - librechat
-       restart: unless-stopped
-   ```
-
-2. In LibreChat → **MCP Servers** → **Add MCP Server**:
-   - **URL:** `https://your-host/` (or `http://gitlab-mcp:8008/` if same network)
-   - **Authentication:** API Key → check **User provides key** → header format **Bearer**
-   - **Save**
-
-3. Each user fills in their PAT through the MCP Tool Select Dialog when configuring an agent.
-
-### `librechat.yaml` equivalent
-
-```yaml
-mcpServers:
-  gitlab:
-    type: streamable-http
-    url: http://gitlab-mcp:8008/
-    startup: false
-    initTimeout: 30000
-    timeout: 120000
-    headers:
-      Authorization: "Bearer {{GITLAB_PAT}}"
-    customUserVars:
-      GITLAB_PAT:
-        title: "GitLab Personal Access Token"
-        description: "Your GitLab PAT with api scope."
-```
-
-The container needs no env-configured token at all in this mode — every
-request is rejected unless `Authorization: Bearer …` is present.
-
----
-
-## Hosting for a remote LibreChat
-
-The server speaks plain HTTP. For LibreChat-as-a-service or any cross-network
-deployment, terminate TLS at a reverse proxy. Common patterns:
-
-- **Caddy** — auto-TLS via Let's Encrypt:
-
-  ```caddyfile
-  mcp.example.com {
-    reverse_proxy gitlab-mcp:8008
-  }
-  ```
-
-- **Traefik** — Docker labels on the `gitlab-mcp` service.
-- **Cloudflare Tunnel** — no public IP needed; expose `gitlab-mcp:8008` through the tunnel.
-
-The `Authorization` and `Mcp-Session-Id` headers must pass through unchanged. Most defaults handle this fine.
-
----
-
-## OAuth for remote users
-
-For a publicly hosted instance where each user signs in with **their own GitLab
-identity** — and modern MCP clients (Claude.ai, Claude Code) connect with **no
-manual token setup** — enable brokered OAuth 2.1. The server then acts as its own
-OAuth Authorization Server in front of GitLab:
-
-- advertises Protected Resource Metadata (RFC 9728) and Authorization Server
-  Metadata (RFC 8414) at the standard `.well-known` endpoints,
-- supports Dynamic Client Registration (RFC 7591), so clients self-register,
-- runs authorization-code + PKCE against both the MCP client **and** GitLab
-  (dual-PKCE) behind **one** fixed GitLab callback,
-- gates the MCP endpoints with bearer validation — unauthenticated requests get
-  `401` + `WWW-Authenticate` pointing at the resource metadata (the discovery trigger),
-- mints its own opaque tokens and keeps each user's GitLab token server-side
-  (no token passthrough).
-
-**Setup**
-
-1. Register **one** GitLab application (instance/group/user → **Applications**):
-   - Redirect URI: `https://<your-host>/gitlab/callback`
-   - Scopes: `api` (read + write) or `read_api`
-   - Confidential: yes (recommended) → you get a client secret; or mark it public for PKCE-only.
-2. Run the server (HTTP mode) with **no** `GITLAB_TOKEN` — identity comes from each user's OAuth login:
-
-   ```bash
-   MCP_TRANSPORT=http GITLAB_MCP_PORT=8008 \
-   GITLAB_URL=https://gitlab.example.com \
-   GITLAB_MCP_OAUTH=true \
-   MCP_SERVER_URL=https://gitlab-mcp.example.com \
-   GITLAB_OAUTH_CLIENT_ID=<application id> \
-   GITLAB_OAUTH_CLIENT_SECRET=<application secret> \
-   GITLAB_OAUTH_SCOPES=api \
-   npx -y @ttpears/gitlab-mcp-server
-   ```
-
-3. Point an MCP client at `https://gitlab-mcp.example.com/` — it discovers the
-   metadata, registers, and walks the user through GitLab sign-in and explicit
-   approval of that MCP client.
-
-`MCP_SERVER_URL` must be HTTPS (terminate TLS at your reverse proxy) and must
-match the host the GitLab redirect URI is registered under. Token/registration
-state is in-memory by default; use encrypted Redis state for persistence across
-restarts or multiple replicas. HTTP transport sessions remain process-local and
-reinitialize after a restart; use session affinity when running multiple replicas.
-
----
-
-## How this differs from GitLab's official MCP server
-
-GitLab ships an [official MCP server](https://docs.gitlab.com/user/gitlab_duo/model_context_protocol/mcp_server/) (Beta) that requires **Premium/Ultimate** and **GitLab Duo**.
-
-| | This server | GitLab official |
-|---|---|---|
-| **GitLab tier** | Free, Premium, Ultimate | Premium / Ultimate only |
-| **GitLab Duo required** | No | Yes |
-| **Auth** | PAT, or brokered OAuth 2.1 + Dynamic Client Registration | OAuth 2.0 Dynamic Client Registration |
-| **Transport** | stdio + streamable HTTP | stdio + HTTP |
-| **Multi-user** | Per-call PAT, OAuth per-user, or service-account fallback | OAuth per-user |
-| **GraphQL schema discovery** | Yes — introspect & run custom queries | No |
-| **Repository browsing & file reading** | Yes | No |
-| **Update issues / MRs / notes** | Yes | No (create only) |
-| **Delete issues / notes** | Yes | No |
-| **CI/CD pipeline management** | Yes | Yes |
-| **MR diffs & commits** | Yes | Yes |
-| **Time tracking & timelogs** | Yes | No |
-| **MR reviewer & approval status** | Yes | No |
-| **Iteration / milestone tracking** | Yes | No |
-| **Project statistics dashboard** | Yes | No |
-| **Group member listing** | Yes | No |
-| **Semantic code search** | No | Yes (requires additional setup) |
-
-**Choose this server** for Free/CE, GraphQL flexibility, LibreChat multi-user,
-or brokered OAuth without GitLab Duo. **Choose the official server** for
-Premium+Duo with semantic code search.
-
----
-
-## Tools
-
-### Search & Discovery
-| Tool | Description |
-|------|-------------|
-| `search_gitlab` | Global search across projects, issues, and merge requests |
-| `search_projects` | Find repositories by name or description |
-| `search_issues` | Search issues globally or within a project (filter by assignee, author, labels, state) |
-| `search_merge_requests` | Find merge requests by username or within a project |
-| `search_users` | Find team members and contributors |
-| `search_groups` | Discover groups and organizations |
-| `search_labels` | Search labels in a project or group |
-| `list_group_members` | List group members with access levels |
-| `browse_repository` | Explore directory structure and files |
-| `get_file_content` | Read file contents for code analysis |
-
-### Read Operations
-| Tool | Description |
-|------|-------------|
-| `get_project` | Detailed project information |
-| `get_issues` | List project issues with pagination |
-| `get_merge_requests` | List project merge requests with pagination |
-| `get_merge_request_pipelines` | Get CI/CD pipelines for a merge request |
-| `get_pipeline_jobs` | Get jobs for a specific pipeline |
-| `get_merge_request_diffs` | Get diff statistics for a merge request |
-| `get_merge_request_commits` | Get commits for a merge request |
-| `get_notes` | Get notes/comments on an issue or merge request |
-| `list_milestones` | List milestones with progress statistics |
-| `list_iterations` | List iterations/sprints (Premium/Ultimate) |
-| `get_time_tracking` | Get time estimate, spent, and timelogs |
-| `get_merge_request_reviewers` | Get MR approval and reviewer status |
-| `get_project_statistics` | Aggregate project stats dashboard |
-| `get_user_issues` | Get all issues assigned to a user |
-| `get_user_merge_requests` | Get MRs authored by or assigned to a user |
-| `get_work_item` | Fetch a work item (issue, task, epic, incident, OKR) by ID with full widget data |
-| `list_work_items` | List work items in a group or project, filtered by type and state |
-| `list_broadcast_messages` | List instance-wide broadcast messages |
-| `get_broadcast_message` | Get a specific broadcast message by ID |
-| `list_my_todos` | Authenticated user's to-do inbox — notifications about issues, MRs, mentions, reviews requested |
-| `list_my_events` | Authenticated user's activity feed — pushes, MRs, comments, approvals |
-| `list_user_events` | Another user's public activity feed by username or ID |
-| `list_project_events` | Activity events for a specific project |
-| `resolve_path` | Resolve a path to a project or group |
-| `get_available_queries` | Discover available GraphQL operations |
-| `execute_custom_query` | Run custom GraphQL queries |
-
-### Achievements
-
-GitLab Achievements are available on all tiers when enabled on the instance (introduced behind a feature flag in 15.10, enabled by default in 19.2, generally available in 19.3). Writes require a full-access token and group Maintainer/Owner permissions.
-
-| Tool | Description |
-|------|-------------|
-| `list_achievements` | List group achievements by cursor, optionally filter IDs and preview active recipients |
-| `create_achievement` | Create a named group achievement with an optional description |
-| `update_achievement` | Update name or description; an empty description clears it |
-| `delete_achievement` | Delete an achievement and all associated awards |
-| `award_achievement` | Award to an exact username with an optional message |
-| `revoke_achievement` | Revoke a specific award ID or look up a unique active award by group, achievement, and username |
-
-IDs can be numeric or GitLab global IDs. `list_achievements` uses `first`, `after`, and `fetchAll` as above; `fetchAll` stops at `first` items. `includeRecipients` adds one page of active awards per achievement with its own `pageInfo`; it does not fetch every recipient. Use the returned award ID (`userAchievementId`) for precise revocation. The username lookup scans recipient pages, stops with an explicit error if the scan limit is reached, and requires an award ID when multiple active awards match.
-
-GitLab may require recipient acceptance before an award appears on a profile and sends an award notification. Avatar uploads and user profile display/reordering are managed in GitLab. See [GitLab Achievements documentation](https://docs.gitlab.com/user/profile/achievements/) and the [GraphQL mutation reference](https://docs.gitlab.com/api/graphql/reference/#mutationachievementscreate).
-
-### Write Operations (require user authentication)
-| Tool | Description |
-|------|-------------|
-| `create_issue` | Create new issues |
-| `create_merge_request` | Create new merge requests |
-| `create_note` | Add a comment/note to an issue or merge request |
-| `update_issue` | Update title, description, assignees, labels, due date |
-| `update_merge_request` | Update title, description, assignees, reviewers, labels |
-| `update_note` | Edit the body of an existing comment |
-| `delete_issue` | Delete an issue (issue author or maintainer required) |
-| `delete_note` | Delete a comment (note author or maintainer required) |
-| `manage_pipeline` | Retry or cancel a CI/CD pipeline |
-| `create_broadcast_message` | Create a broadcast message (instance admin) |
-| `update_broadcast_message` | Update a broadcast message (instance admin) |
-| `delete_broadcast_message` | Delete a broadcast message (instance admin) |
-| `mark_todo_done` | Mark a single to-do item as done |
-| `mark_all_todos_done` | Mark all pending to-do items as done for the authenticated user |
-| `restore_todo` | Restore a previously-done to-do item back to pending |
-
----
-
-## Configuration
-
-### Environment variables
-
-| Variable | Description | Default |
-|---|---|---|
-| `GITLAB_URL` | GitLab instance URL | `https://gitlab.com` |
-| `GITLAB_TOKEN` | Full-access fallback token (reads + writes) | — |
-| `GITLAB_READ_TOKEN` | Read-only fallback token (writes always rejected) | — |
-| `GITLAB_PIN_HOST` | Force every request to `GITLAB_URL`, ignoring per-call/header `gitlabUrl` (SSRF guard). Set `false` to serve multiple instances | `true` |
-| `GITLAB_ALLOW_SHARED_ESCAPE_HATCH` | Allow `execute_custom_query` / `execute_rest_read` / `execute_rest_write` to run on the shared token (otherwise they require per-call credentials) | `false` |
-| `GITLAB_MAX_PAGE_SIZE` | Maximum items per page (1–100) | `50` |
-| `GITLAB_TIMEOUT` | Request timeout in milliseconds | `30000` |
-| `GITLAB_MAX_CONCURRENCY` | Max concurrent in-flight GitLab requests. Excess work enters a bounded queue. `0` = explicit unlimited mode | `16` |
-| `GITLAB_MAX_QUEUED_REQUESTS` | Maximum waiting GitLab requests; overflow returns a tool error | `128` |
-| `GITLAB_MAX_QUEUE_WAIT_MS` | Maximum queue wait before a tool error | `15000` |
-| `GITLAB_MAX_RESPONSE_BYTES` | Maximum buffered GitLab response bytes, including after decompression | `16777216` |
-| `MCP_MAX_SESSIONS` | Maximum active/initializing HTTP sessions | `1000` |
-| `MCP_MAX_SESSIONS_PER_IDENTITY` | HTTP sessions per bearer credential (anonymous sessions share one identity) | `10` |
-| `MCP_REQUESTS_PER_MINUTE` | Requests per credential; a per-IP limit of five times this also applies | `240` |
-| `MCP_MAX_INFLIGHT_PER_IDENTITY` | Simultaneous HTTP requests per credential; per-IP limit is five times this | `8` |
-| `MCP_MAX_INFLIGHT_REQUESTS` | Simultaneous MCP HTTP requests across credentials | `256` |
-| `GITLAB_ANALYTICS_MAX_PROJECTS` | Cap on projects scanned per group-analytics fan-out (logs when bounded) | `500` |
-| `GITLAB_MCP_PORT` | HTTP server port | `8008` |
-| `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | `stdio` |
-| `MCP_ALLOWED_ORIGINS` | Comma-separated browser origins allowed for HTTP requests. Defaults to localhost/127.0.0.1 on the configured port plus the origin of `MCP_SERVER_URL`. Requests without Origin remain supported | — |
-| `TRUST_PROXY` | Express `trust proxy` when behind a reverse proxy (hop count like `1`, boolean, or IP/subnet list). Needed for correct per-IP OAuth rate limiting behind traefik/nginx | unset |
-| `GITLAB_MCP_OAUTH` | Enable brokered OAuth 2.1 (HTTP mode) — see [OAuth for remote users](#oauth-for-remote-users) | `false` |
-| `MCP_SERVER_URL` | Public HTTPS URL of this server (OAuth issuer/resource id) — required when OAuth is on | — |
-| `GITLAB_OAUTH_CLIENT_ID` | GitLab application id — required when OAuth is on | — |
-| `GITLAB_OAUTH_CLIENT_SECRET` | GitLab application secret (omit for a public/PKCE-only app) | — |
-| `GITLAB_OAUTH_SCOPES` | Space-separated GitLab scopes to request | `api` |
-| `GITLAB_OAUTH_CALLBACK_PATH` | Path of the fixed GitLab redirect URI | `/gitlab/callback` |
-| `GITLAB_OAUTH_ALLOWED_GROUPS` | Restrict the connector to members of these GitLab groups (comma/space separated full-paths; subgroups included). Empty = any authenticated user | unset |
-| `REDIS_URL` | Back OAuth broker state with Redis (survives redeploys, enables >1 replica). Unset = in-memory | unset |
-| `REDIS_KEY_PREFIX` | Base namespace for Redis keys (issuer host is appended) | `gitlab-mcp` |
-| `OAUTH_STORAGE_ENCRYPTION_KEY` | Required for Redis: 64 hex characters encoding a secret 32-byte AES-GCM key, shared by replicas | unset |
-| `REDIS_ALLOW_INSECURE` | Explicitly allow non-TLS Redis on a trusted private network; encryption at rest remains required | `false` |
-
-`GITLAB_TOKEN` and `GITLAB_READ_TOKEN` are **mutually exclusive**; setting both is a startup error.
-
-### Removed in 1.14.0
-
-- `GITLAB_AUTH_MODE` — the three-way enum is gone. Pick your deployment shape by which env var you set; see [Choose your deployment](#choose-your-deployment).
-- `GITLAB_SHARED_ACCESS_TOKEN` — rename to `GITLAB_TOKEN` (full access) or `GITLAB_READ_TOKEN` (read-only).
-
-Old env vars trigger a deprecation warning at startup and are otherwise ignored.
-
----
-
-## Troubleshooting
-
-**"This operation requires authentication" / "Write operation requires a user token":**
-- For LibreChat: check the user filled in their PAT in the MCP Tool Select Dialog (or in their `customUserVars`).
-- For Claude Code: confirm `GITLAB_TOKEN` is set in the MCP server's `env` block.
-- If you set `GITLAB_READ_TOKEN`, write operations against it are rejected by design — supply per-call user creds for writes.
-
-**Connection issues with LibreChat:**
-- `type: streamable-http` (not `sse`).
-- URL is the Docker service name (`http://gitlab-mcp:8008/`), not localhost, when LibreChat and gitlab-mcp share a Docker network.
-- `docker logs gitlab-mcp` shows session init and request lines.
-
-**Schema introspection failed:**
-- GitLab 12.0+ with GraphQL API enabled.
-- Verify `GITLAB_URL` is reachable from the container.
-
-**Debug logging:**
-
-```bash
-NODE_ENV=development GITLAB_TOKEN=glpat-... npm start
-```
-
-**Health check (HTTP mode):**
-
-```bash
-curl http://localhost:8008/health
-```
-
----
-
-## Changelog
-
-See [`CHANGELOG.md`](./CHANGELOG.md). Releases before 1.14.0 are in
-[GitHub releases](https://github.com/ttpears/gitlab-mcp/releases).
-
-## Runtime and MCP compatibility
-
-Node.js 22 or later is required; the container uses Node.js 24 LTS. HTTP browser clients must use an allowed origin (`MCP_ALLOWED_ORIGINS`); public deployments should set `MCP_SERVER_URL`. Native clients without an `Origin` header continue to work. Tool execution and input-validation failures return `isError: true` with a text explanation. Object results include `structuredContent` alongside the JSON text for older clients.
-
-
-## License
-
-[MIT](./LICENSE)
+Licensed under [MIT](LICENSE).
