@@ -93,6 +93,18 @@ describe('MCP tool calls', () => {
   it('keeps unknown tools as protocol errors', async () => {
     await expect(client.callTool({ name: 'missing_tool', arguments: {} })).rejects.toThrow(/not found/);
   });
+
+  it('returns a tool error when GitLab violates a declared output contract', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: { project: { id: 'gid://gitlab/Project/1', name: 'Project' } } }), {
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const result = await client.callTool({ name: 'get_project', arguments: {
+      fullPath: 'group/project', userCredentials: { accessToken: 'test' },
+    } });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: 'text', text: expect.stringContaining('fullPath') }]);
+    expect(result.structuredContent).toBeUndefined();
+  });
 });
 
 describe('HTTP origin validation', () => {

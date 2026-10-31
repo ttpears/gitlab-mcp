@@ -20,6 +20,8 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - run: npm run check:release
+      - run: npm audit --omit=dev --audit-level=moderate
       - run: npm run build
 
       # Trusted publishing (OIDC) requires npm >= 11.5.1. Pin to the npm 11 major:

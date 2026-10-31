@@ -1,4 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
+import { fetchBuffered } from './http.js';
 import type { Request, Response } from 'express';
 import type {
   OAuthServerProvider,
@@ -568,16 +569,9 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
 
   /** Authenticated GET against the GitLab REST API as the user, with timeout. */
   private async gitlabApiGet(path: string, gitlabAccessToken: string) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), this.opts.timeoutMs);
-    try {
-      return await fetch(`${this.opts.gitlabBaseUrl.replace(/\/$/, '')}/api/v4${path}`, {
-        headers: { Authorization: `Bearer ${gitlabAccessToken}`, Accept: 'application/json' },
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+    return fetchBuffered(`${this.opts.gitlabBaseUrl.replace(/\/$/, '')}/api/v4${path}`, {
+      headers: { Authorization: `Bearer ${gitlabAccessToken}`, Accept: 'application/json' },
+    }, this.opts.timeoutMs);
   }
 
   private async gitlabTokenRequest(params: Record<string, string>): Promise<{

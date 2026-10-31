@@ -5,6 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 - `npm run build` — TypeScript compile to `dist/` (tsc, ESM).
+- `npm run check:release` — Verify package, lockfile, plugin, changelog, and deployment image versions agree.
+- `npm run build:mcpb` — Build and package the Claude Desktop bundle.
 - `npm run dev` — Run the server directly from `src/` via `tsx` (stdio transport by default).
 - `npm start` — Run the compiled server from `dist/index.js`.
 - `npm test` — Jest. Run a single test with `npx jest <path>` or `npx jest -t "<name>"`.
@@ -26,7 +28,10 @@ Key flow to understand for any tool change: `index.ts` routes the MCP call → l
 ## Project conventions (from `.cursorrules`)
 
 - **Auth**: two role-named env vars determine fallback behavior. `GITLAB_TOKEN` (full access) is used for reads and writes when no per-call user creds are present. `GITLAB_READ_TOKEN` (read-only) is used only for reads; writes against it are always rejected. Setting both is a startup error. With neither set, every operation requires per-call user creds. Never silently write with a `GITLAB_READ_TOKEN`.
-- **Pagination**: every list/search tool takes `first`, `after`, and `fetchAll`. Defaults: `first=20`, cap at `config.maxPageSize`. `fetchAll=true` routes through `fetchAllPages()` and returns `{ nodes, totalFetched, hasMore, pageInfo }`. `search_gitlab` paginates projects and issues independently.
+- **Pagination**: list/search tools use `first`, `after`, and `fetchAll`. Defaults: `first=20`, cap each page at `config.maxPageSize`. `fetchAll=true` is bounded by `first`, honors `after`, and returns `{ nodes, totalFetched, hasMore, pageInfo }`. Missing connections or non-advancing cursors are errors. `search_gitlab` paginates projects and issues independently.
+- **Requests**: automatically retry reads only; never replay a mutation or REST write after an ambiguous failure. Timeouts and concurrency cover complete response bodies. Propagate the MCP request signal through `withRequestSignal()` so queueing, response reads, and retry backoff can be cancelled.
+- **HTTP identity**: every request must carry the same bearer credential as session initialization. A changed or missing credential returns HTTP 404 and requires reinitialization; test OAuth refresh with this behavior.
+- **Tool outputs**: declare a meaningful output schema for stable object results. The MCP handler validates it before returning `structuredContent`, preserving additional fields.
 - **Sort**: issues, MRs, and projects default to `UPDATED_DESC` for recency bias.
 - **State filters**: `all` → undefined; other values → uppercased GraphQL enum.
 - **GraphQL compatibility**: avoid fields that don't exist on self-hosted GitLab (e.g. `Project.defaultBranch`) — rely on introspection (`get_type_fields`) when in doubt. Reviewers apply to MRs only, not issues.

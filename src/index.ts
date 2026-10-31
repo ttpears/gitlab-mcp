@@ -3,10 +3,11 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { realpathSync, readFileSync } from 'node:fs';
 import { URL, fileURLToPath } from 'url';
 import express from 'express';
+import type { Server as HttpServer } from 'node:http';
 import { z } from 'zod';
 
 // Helper to break type inference chain and avoid "Type instantiation is excessively deep" errors
@@ -125,9 +126,11 @@ export class GitLabMCPServer {
     transport: StreamableHTTPServerTransport;
     userConfig?: { accessToken: string; gitlabUrl?: string };
     lastActivity: number;
+    identity: string;
   }> = new Map();
   private sessionCleanupInterval?: NodeJS.Timeout;
   private oauthProvider?: GitLabOAuthProvider;
+  private httpListener?: HttpServer;
 
   constructor() {
     // Initialize GitLab client using environment configuration
@@ -230,7 +233,9 @@ export class GitLabMCPServer {
 
         delete validatedInput.userCredentials; // Remove from input to avoid passing to handler
 
-        const result = await tool.handler(validatedInput, this.gitlabClient, userConfig);
+        const rawResult = await this.gitlabClient.withRequestSignal(extra.signal, () =>
+          tool.handler(validatedInput, this.gitlabClient, userConfig));
+        const result = tool.outputSchema ? tool.outputSchema.parse(rawResult) : rawResult;
 
         return {
           content: [
@@ -432,27 +437,31 @@ Provide direct links and a brief summary of the most relevant results.`,
     });
   }
 
+  async close(): Promise<void> {
+    if (this.sessionCleanupInterval) clearInterval(this.sessionCleanupInterval);
+    const sessions = [...this.httpSessions.values()];
+    this.httpSessions.clear();
+    await Promise.allSettled(sessions.map(data => data.server.close()));
+    if (this.server) await this.server.close();
+    this.oauthProvider?.dispose();
+    if (this.httpListener) {
+      const listener = this.httpListener;
+      await new Promise<void>((resolve, reject) => {
+        listener.close(error => error ? reject(error) : resolve());
+        listener.closeIdleConnections();
+      });
+    }
+  }
+
   private setupProcessHandlers(): void {
-    process.on('SIGINT', async () => {
-      if (this.sessionCleanupInterval) {
-        clearInterval(this.sessionCleanupInterval);
-      }
-      this.oauthProvider?.dispose();
-      // Close all HTTP sessions
-      for (const [sessionId, data] of this.httpSessions.entries()) {
-        try {
-          await data.server.close();
-        } catch (e) {
-          // Ignore errors during shutdown
-        }
-      }
-      this.httpSessions.clear();
-      // Close stdio server if running
-      if (this.server) {
-        await this.server.close();
-      }
-      process.exit(0);
-    });
+    const shutdown = () => {
+      void this.close().then(() => process.exit(0), error => {
+        console.error('Shutdown failed:', error);
+        process.exit(1);
+      });
+    };
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
   }
 
   /**
@@ -546,6 +555,7 @@ Provide direct links and a brief summary of the most relevant results.`,
         console.error(`[MCP] Request: ${req.method} session=${sessionIdHeader || 'none'}`);
       }
 
+      const identity = createHash('sha256').update(req.headers.authorization || '').digest('hex');
       const route = classifySessionRequest({
         hasKnownSession: !!sessionIdHeader && this.httpSessions.has(sessionIdHeader),
         sessionIdPresent: !!sessionIdHeader,
@@ -556,6 +566,12 @@ Provide direct links and a brief summary of the most relevant results.`,
       if (route === 'existing') {
         // Existing session: reuse transport and update credentials
         const sessionData = this.httpSessions.get(sessionIdHeader)!;
+        if (sessionData.identity !== identity) {
+          res.status(404).json({ jsonrpc: '2.0', error: {
+            code: -32001, message: 'Session credentials changed. Reinitialize with an initialize request.',
+          }, id: null });
+          return;
+        }
         const userConfig = this.extractUserCredentials(req);
 
         // Update session-specific credentials if provided
@@ -627,7 +643,8 @@ Provide direct links and a brief summary of the most relevant results.`,
               server,
               transport,
               userConfig,
-              lastActivity: Date.now()
+              lastActivity: Date.now(),
+              identity,
             });
             console.error(`[MCP] Session ${sessionId} initialized with ${userConfig ? 'user' : 'no user'} credentials (total sessions: ${this.httpSessions.size})`);
           },
@@ -668,6 +685,146 @@ Provide direct links and a brief summary of the most relevant results.`,
     }
   }
 
+  /** Build the real HTTP application without opening a listener (also used by integration tests). */
+  async createHttpApp(): Promise<express.Express> {
+    const config = loadConfig();
+    const port = Number(process.env.GITLAB_MCP_PORT || 8008);
+    const app = express();
+
+    // Disable X-Powered-By header
+    app.disable('x-powered-by');
+
+    // Trust the reverse proxy (e.g. traefik) when hosted behind one, so req.ip
+    // and the SDK OAuth endpoints' per-IP rate limiting use the real client IP
+    // from X-Forwarded-For instead of the proxy's. Without this, every client
+    // shares the proxy IP and the shared /register limit can lock everyone out.
+    // TRUST_PROXY: a hop count ("1"), boolean ("true"/"false"), or an Express
+    // trust-proxy string (e.g. "loopback, uniquelocal"). Unset → not trusted.
+    const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+    if (trustProxy !== undefined) {
+      app.set('trust proxy', trustProxy);
+    }
+
+    const allowedOrigins = new Set([
+      `http://localhost:${port}`,
+      `http://127.0.0.1:${port}`,
+      ...(process.env.MCP_SERVER_URL ? [new URL(process.env.MCP_SERVER_URL).origin] : []),
+      ...(process.env.MCP_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean),
+    ]);
+    app.use(createOriginGuard(allowedOrigins));
+
+    // Parse JSON bodies - but NOT for /message endpoint (SSE transport needs raw stream)
+    app.use((req, res, next) => {
+      if (req.path === '/message') {
+        // Skip JSON parsing for SSE message endpoint
+        next();
+      } else {
+        express.json()(req, res, next);
+      }
+    });
+
+    // CORS and headers
+    app.use((req, res, next) => {
+      if (req.headers.origin) {
+        res.header('Access-Control-Allow-Origin', req.headers.origin);
+        res.vary('Origin');
+      }
+      res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID, Cache-Control, MCP-Protocol-Version');
+      res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version');
+
+      // Disable buffering for SSE streams
+      if (req.headers.accept?.includes('text/event-stream')) {
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+      }
+
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
+        return;
+      }
+      next();
+    });
+
+    // OAuth 2.1 brokered auth (optional). When GITLAB_MCP_OAUTH is enabled the
+    // server becomes its own Authorization Server in front of GitLab: it
+    // advertises protected-resource + AS metadata, supports Dynamic Client
+    // Registration, and gates the MCP endpoints behind a validated bearer token.
+    const mcpGuards: express.RequestHandler[] = [];
+    if (process.env.GITLAB_MCP_OAUTH && /^(1|true|yes|on)$/i.test(process.env.GITLAB_MCP_OAUTH)) {
+      const oauthOptions = buildOAuthOptions({
+        gitlabUrl: config.gitlabUrl,
+        serverUrl: process.env.MCP_SERVER_URL,
+        clientId: process.env.GITLAB_OAUTH_CLIENT_ID,
+        clientSecret: process.env.GITLAB_OAUTH_CLIENT_SECRET,
+        scopes: process.env.GITLAB_OAUTH_SCOPES,
+        callbackPath: process.env.GITLAB_OAUTH_CALLBACK_PATH,
+        allowedGroups: process.env.GITLAB_OAUTH_ALLOWED_GROUPS,
+        timeoutMs: config.defaultTimeout,
+      });
+      const issuerUrl = new URL(oauthOptions.serverUrl);
+      // Shared state store: Redis when REDIS_URL is set (survives redeploys,
+      // enables >1 replica), else in-memory. Namespaced by issuer host so
+      // co-tenant MCPs on one Redis don't collide but replicas DO share.
+      const oauthStore = await createOAuthStore({
+        redisUrl: process.env.REDIS_URL,
+        keyPrefix: `${process.env.REDIS_KEY_PREFIX || 'gitlab-mcp'}:${issuerUrl.host}`,
+      });
+      this.oauthProvider = new GitLabOAuthProvider(oauthOptions, oauthStore);
+      if (process.env.REDIS_URL) {
+        console.error(`[MCP] OAuth state store: Redis (${issuerUrl.host})`);
+      }
+
+      // Standard AS endpoints: /authorize, /token, /register, /revoke, and the
+      // .well-known metadata documents. Must be mounted at the app root.
+      app.use(
+        mcpAuthRouter({
+          provider: this.oauthProvider,
+          issuerUrl,
+          scopesSupported: oauthOptions.scopes.split(/[\s,]+/).filter(Boolean),
+          resourceName: 'GitLab MCP Server',
+        })
+      );
+
+      // Fixed GitLab callback (the only redirect URI registered in GitLab).
+      app.get(oauthOptions.callbackPath, (req, res) => this.oauthProvider!.handleGitLabCallback(req, res));
+
+      // Gate the MCP endpoints; 401s carry WWW-Authenticate → resource metadata.
+      mcpGuards.push(
+        requireBearerAuth({
+          verifier: this.oauthProvider,
+          expectedResource: issuerUrl,
+          resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(issuerUrl),
+        })
+      );
+      console.error(`[MCP] OAuth enabled — issuer ${oauthOptions.serverUrl}, GitLab callback ${oauthOptions.callbackPath}`);
+    }
+
+    // Streamable HTTP endpoint at root (primary transport)
+    app.all('/', ...mcpGuards, (req, res) => this.handleStreamableHTTP(req, res));
+
+    // Alternative /mcp endpoint for container compatibility
+    app.all('/mcp', ...mcpGuards, (req, res) => this.handleStreamableHTTP(req, res));
+
+    // DELETE (explicit session termination, per MCP spec) is matched by the
+    // app.all('/') and app.all('/mcp') routes below and handled by the
+    // StreamableHTTP transport — behind the same bearer guard as POST/GET.
+
+    // Health check endpoint
+    app.get('/health', (req, res) => {
+      res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        sessions: this.httpSessions.size,
+        version: SERVER_VERSION,
+        protocol: LATEST_PROTOCOL_VERSION
+      });
+    });
+
+    return app;
+  }
+
   async run(): Promise<void> {
     try {
       const config = loadConfig();
@@ -690,141 +847,9 @@ Provide direct links and a brief summary of the most relevant results.`,
       const useHttp = process.env.MCP_TRANSPORT === 'http';
       
       if (useHttp && port) {
-        // Streamable HTTP transport for LibreChat and modern MCP clients
-        const app = express();
+        const app = await this.createHttpApp();
 
-        // Disable X-Powered-By header
-        app.disable('x-powered-by');
-
-        // Trust the reverse proxy (e.g. traefik) when hosted behind one, so req.ip
-        // and the SDK OAuth endpoints' per-IP rate limiting use the real client IP
-        // from X-Forwarded-For instead of the proxy's. Without this, every client
-        // shares the proxy IP and the shared /register limit can lock everyone out.
-        // TRUST_PROXY: a hop count ("1"), boolean ("true"/"false"), or an Express
-        // trust-proxy string (e.g. "loopback, uniquelocal"). Unset → not trusted.
-        const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
-        if (trustProxy !== undefined) {
-          app.set('trust proxy', trustProxy);
-        }
-
-        const allowedOrigins = new Set([
-          `http://localhost:${port}`,
-          `http://127.0.0.1:${port}`,
-          ...(process.env.MCP_SERVER_URL ? [new URL(process.env.MCP_SERVER_URL).origin] : []),
-          ...(process.env.MCP_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean),
-        ]);
-        app.use(createOriginGuard(allowedOrigins));
-
-        // Parse JSON bodies - but NOT for /message endpoint (SSE transport needs raw stream)
-        app.use((req, res, next) => {
-          if (req.path === '/message') {
-            // Skip JSON parsing for SSE message endpoint
-            next();
-          } else {
-            express.json()(req, res, next);
-          }
-        });
-
-        // CORS and headers
-        app.use((req, res, next) => {
-          if (req.headers.origin) {
-            res.header('Access-Control-Allow-Origin', req.headers.origin);
-            res.vary('Origin');
-          }
-          res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-          res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-GitLab-Url, Mcp-Session-Id, Accept, Last-Event-ID, Cache-Control, MCP-Protocol-Version');
-          res.header('Access-Control-Expose-Headers', 'Mcp-Session-Id, MCP-Protocol-Version');
-
-          // Disable buffering for SSE streams
-          if (req.headers.accept?.includes('text/event-stream')) {
-            res.setHeader('Cache-Control', 'no-cache');
-            res.setHeader('Connection', 'keep-alive');
-            res.setHeader('X-Accel-Buffering', 'no');
-          }
-
-          if (req.method === 'OPTIONS') {
-            res.sendStatus(200);
-            return;
-          }
-          next();
-        });
-
-        // OAuth 2.1 brokered auth (optional). When GITLAB_MCP_OAUTH is enabled the
-        // server becomes its own Authorization Server in front of GitLab: it
-        // advertises protected-resource + AS metadata, supports Dynamic Client
-        // Registration, and gates the MCP endpoints behind a validated bearer token.
-        const mcpGuards: express.RequestHandler[] = [];
-        if (process.env.GITLAB_MCP_OAUTH && /^(1|true|yes|on)$/i.test(process.env.GITLAB_MCP_OAUTH)) {
-          const oauthOptions = buildOAuthOptions({
-            gitlabUrl: config.gitlabUrl,
-            serverUrl: process.env.MCP_SERVER_URL,
-            clientId: process.env.GITLAB_OAUTH_CLIENT_ID,
-            clientSecret: process.env.GITLAB_OAUTH_CLIENT_SECRET,
-            scopes: process.env.GITLAB_OAUTH_SCOPES,
-            callbackPath: process.env.GITLAB_OAUTH_CALLBACK_PATH,
-            allowedGroups: process.env.GITLAB_OAUTH_ALLOWED_GROUPS,
-            timeoutMs: config.defaultTimeout,
-          });
-          const issuerUrl = new URL(oauthOptions.serverUrl);
-          // Shared state store: Redis when REDIS_URL is set (survives redeploys,
-          // enables >1 replica), else in-memory. Namespaced by issuer host so
-          // co-tenant MCPs on one Redis don't collide but replicas DO share.
-          const oauthStore = await createOAuthStore({
-            redisUrl: process.env.REDIS_URL,
-            keyPrefix: `${process.env.REDIS_KEY_PREFIX || 'gitlab-mcp'}:${issuerUrl.host}`,
-          });
-          this.oauthProvider = new GitLabOAuthProvider(oauthOptions, oauthStore);
-          if (process.env.REDIS_URL) {
-            console.error(`[MCP] OAuth state store: Redis (${issuerUrl.host})`);
-          }
-
-          // Standard AS endpoints: /authorize, /token, /register, /revoke, and the
-          // .well-known metadata documents. Must be mounted at the app root.
-          app.use(
-            mcpAuthRouter({
-              provider: this.oauthProvider,
-              issuerUrl,
-              scopesSupported: oauthOptions.scopes.split(/[\s,]+/).filter(Boolean),
-              resourceName: 'GitLab MCP Server',
-            })
-          );
-
-          // Fixed GitLab callback (the only redirect URI registered in GitLab).
-          app.get(oauthOptions.callbackPath, (req, res) => this.oauthProvider!.handleGitLabCallback(req, res));
-
-          // Gate the MCP endpoints; 401s carry WWW-Authenticate → resource metadata.
-          mcpGuards.push(
-            requireBearerAuth({
-              verifier: this.oauthProvider,
-              expectedResource: issuerUrl,
-              resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(issuerUrl),
-            })
-          );
-          console.error(`[MCP] OAuth enabled — issuer ${oauthOptions.serverUrl}, GitLab callback ${oauthOptions.callbackPath}`);
-        }
-
-        // Streamable HTTP endpoint at root (primary transport)
-        app.all('/', ...mcpGuards, (req, res) => this.handleStreamableHTTP(req, res));
-
-        // Alternative /mcp endpoint for container compatibility
-        app.all('/mcp', ...mcpGuards, (req, res) => this.handleStreamableHTTP(req, res));
-
-        // DELETE (explicit session termination, per MCP spec) is matched by the
-        // app.all('/') and app.all('/mcp') routes below and handled by the
-        // StreamableHTTP transport — behind the same bearer guard as POST/GET.
-
-        // Health check endpoint
-        app.get('/health', (req, res) => {
-          res.json({
-            status: 'healthy',
-            timestamp: new Date().toISOString(),
-            sessions: this.httpSessions.size,
-            version: SERVER_VERSION,
-            protocol: LATEST_PROTOCOL_VERSION
-          });
-        });
-
-        app.listen(port, () => {
+        this.httpListener = app.listen(port, () => {
           console.error('='.repeat(60));
           console.error('GitLab MCP Server - HTTP Mode');
           console.error('='.repeat(60));

@@ -1,59 +1,16 @@
-# LibreChat Integration - Add this to your LibreChat docker-compose.override.yml
-# Then restart with: docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
-#
-# Setup Instructions:
-# 1. Copy Dockerfile to your LibreChat root directory as Dockerfile.mcp-gitlab
-#    cp Dockerfile /path/to/librechat/Dockerfile.mcp-gitlab
-#
-# 2. Add GitLab environment variables to your LibreChat .env file:
-#    GITLAB_URL=https://gitlab.com
-#    GITLAB_AUTH_MODE=hybrid
-#    GITLAB_SHARED_ACCESS_TOKEN=your-optional-shared-token
-#    GITLAB_MAX_PAGE_SIZE=50
-#    GITLAB_TIMEOUT=30000
-#    GITLAB_MCP_PORT=8008
-#    MCP_TRANSPORT=http
-#
-# 3. Add this service configuration to docker-compose.override.yml
-#
-# 4. Configure in librechat.yml (see librechat.example.yml)
-#    mcpServers:
-#      gitlab:
-#        type: streamable-http
-#        url: "http://gitlab-mcp:8008/"
-#        headers:
-#          Authorization: "Bearer {{GITLAB_PAT}}"
-#          X-GitLab-Url: "{{GITLAB_URL_OVERRIDE}}"
-#
-# 5. Restart LibreChat:
-#    docker compose down && docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
-
+# Add alongside LibreChat's services. Configure GITLAB_URL and exactly one of
+# GITLAB_READ_TOKEN or GITLAB_TOKEN in .env, or omit both for strict per-user auth.
+# docker compose -f docker-compose.yml -f docker-compose.override.yml up -d gitlab-mcp api
+# Configure LibreChat with librechat.example.yml; send the PAT on every request.
 services:
   gitlab-mcp:
-    build:
-      context: .
-      dockerfile: Dockerfile.mcp-gitlab
-      args:
-        # Specify version/tag to build (default: main)
-        # Use a specific version for production: GITLAB_MCP_VERSION=v1.1.0
-        GITLAB_MCP_VERSION: ${GITLAB_MCP_VERSION:-main}
+    image: ghcr.io/ttpears/gitlab-mcp:3.0.0
     env_file:
       - .env
     environment:
-      # These can also be set in .env file (recommended)
-      # GITLAB_URL: "https://gitlab.com"
-      # GITLAB_AUTH_MODE: "hybrid"
-      # GITLAB_SHARED_ACCESS_TOKEN: ""
-      # GITLAB_MCP_PORT: "8008"
-      # MCP_TRANSPORT: "http"
-    ports:
-      - "8008:8008"
+      MCP_TRANSPORT: http
+      GITLAB_MCP_PORT: '8008'
     networks:
       - librechat
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "node", "-e", "console.log('GitLab MCP Server is healthy')"]
-      interval: 30s
-      timeout: 3s
-      start_period: 5s
-      retries: 3
+    # The image supplies a real /health check. Publish a host port only if needed.
