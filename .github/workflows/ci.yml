@@ -35,6 +35,7 @@ jobs:
       - run: npm audit --audit-level=moderate
       - run: npm run build
       - run: npm run typecheck
+      - run: npm run check:docs
       - run: npm test
       - run: npm run build:mcpb
         if: matrix.node == 24

@@ -1,43 +1,11 @@
-# Project rules and notes for gitlab-mcp
+Canonical repository guidance: CLAUDE.md and CONTRIBUTING.md.
+Authentication contract: docs/authentication.md.
+Transport and session contract: docs/deployment.md.
+Pagination and results: docs/usage.md.
+Configuration: docs/configuration.md.
+Tool schemas: src/tools.ts; regenerate docs/reference/tools.md with npm run docs:generate.
 
-- Authentication model
-  - Per-call credentials take priority; GITLAB_TOKEN is a full-access fallback and GITLAB_READ_TOKEN is a read-only fallback.
-  - GITLAB_TOKEN and GITLAB_READ_TOKEN are mutually exclusive. With neither set, every operation requires user credentials.
-  - Tools accept optional `userCredentials` with `accessToken` and optional `gitlabUrl`.
-
-- Transports
-  - Server provides stdio (default) and Streamable HTTP transport at `/` (and `/mcp` for container compatibility).
-  - LibreChat (HTTP) should use `type: streamable-http` and `url: http://HOST:PORT/`.
-  - HTTP requires `GITLAB_MCP_PORT` and `MCP_TRANSPORT=http`; `PORT` is ignored.
-
-- Pagination
-  - All list/search tools support cursor-based pagination (`first`, `after`) and auto-pagination (`fetchAll`).
-  - `fetchAll` loops server-side via `fetchAllPages()` up to maxItems (default 100), returning `{ nodes, totalFetched, hasMore, pageInfo }`.
-  - `fetchAll` is bounded by `first` and honors `after`. Default page size: 20. Max per request: `config.maxPageSize` (default 50, env `GITLAB_MAX_PAGE_SIZE`).
-  - Sort defaults to `UPDATED_DESC` for issues/MRs and `latest_activity_desc` for projects.
-  - `search_gitlab` paginates projects and issues independently when `fetchAll=true`.
-
-- GraphQL / Validation
-  - Avoid unsupported fields (e.g., `Project.defaultBranch`) across self-hosted instances; rely on introspection.
-  - Search term inputs are trimmed and empty strings are rejected for tools that require them.
-  - Issue/MR state: `all` maps to undefined; others map to GQL enums via UPPERCASE.
-
-- New discovery tools
-  - `resolve_path`: Distinguishes `group` vs `project` and lists group projects.
-  - `get_group_projects`: Lists projects within a group, supports search and pagination.
-  - `get_type_fields`: Lists fields for a given GraphQL type using introspection.
-  - `update_issue`: Schema-aware updates for issues; falls back to granular mutations when needed.
-  - `update_merge_request`: Schema-aware MR updates; supports assignees, reviewers, labels, title/description.
-
-- Error handling
-  - Read tools fall back to shared token; write tools throw if no user token is provided.
-  - Null guards ensure clearer errors when a group path is provided to project-only tools.
-
-- Maintenance
-  - Keep this file updated when adding tools, transports, or auth changes.
-  - Reviewers apply to merge requests, not issues (per GitLab GraphQL docs).
-
-- Request reliability
-  - Only reads automatically retry; never replay mutations or REST writes after an ambiguous failure.
-  - Deadlines/concurrency cover complete response bodies. Propagate MCP cancellation.
-  - HTTP sessions require the same bearer credential on every request; rotation requires reinitialization.
+Preserve credential precedence, read-only enforcement, host pinning, bounded queues,
+response limits, cancellation, and read-only retries. Never replay ambiguous writes.
+Keep OAuth one-time state atomic and Redis encrypted; bind HTTP sessions to bearers.
+Run relevant tests, typecheck, check:docs, and check:release. Use PRs for protected main.

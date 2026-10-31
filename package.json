@@ -13,7 +13,9 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest",
     "prepublishOnly": "npm run build",
     "typecheck": "tsc -p tsconfig.test.json",
-    "check:release": "node scripts/check-release.mjs"
+    "check:release": "node scripts/check-release.mjs",
+    "docs:generate": "npm run build && node scripts/generate-tool-docs.mjs",
+    "check:docs": "npm run build && node scripts/check-docs.mjs"
   },
   "bin": {
     "gitlab-mcp-server": "./dist/index.js",
@@ -56,7 +58,16 @@
     "dist",
     "LICENSE",
     "README.md",
-    "icon.svg"
+    "icon.svg",
+    "CONTRIBUTING.md",
+    "docs",
+    ".env.example",
+    ".clauderc.example",
+    "claude_desktop_config.example.json",
+    "mcp.json",
+    "mcp-inspector.example.json",
+    "librechat.example.yml",
+    "docker-compose.override.yml"
   ],
   "engines": {
     "node": ">=22"

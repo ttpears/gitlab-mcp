@@ -1,60 +1,14 @@
-# CLAUDE.md
+# Repository guidance
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for commands, architecture, implementation conventions, tests, documentation maintenance, and release automation. Read [authentication](docs/authentication.md) before changing credentials, OAuth, or storage, and [operations](docs/deployment.md) before changing transport/session behavior.
 
-## Commands
+## Working rules
 
-- `npm run build` — TypeScript compile to `dist/` (tsc, ESM).
-- `npm run check:release` — Verify package, lockfile, plugin, changelog, and deployment image versions agree.
-- `npm run build:mcpb` — Build and package the Claude Desktop bundle.
-- `REDIS_TEST_URL=redis://127.0.0.1:6379 npm test` — Include real Redis encryption, atomic consumption, and cross-replica revocation tests. CI always supplies Redis.
-- `npm run dev` — Run the server directly from `src/` via `tsx` (stdio transport by default).
-- `npm start` — Run the compiled server from `dist/index.js`.
-- `npm test` — Jest. Run a single test with `npx jest <path>` or `npx jest -t "<name>"`.
-- Local smoke test over HTTP: `MCP_TRANSPORT=http GITLAB_MCP_PORT=8008 GITLAB_TOKEN=glpat-... npm run dev`, then point an MCP client at `http://localhost:8008/` (health check: `curl http://localhost:8008/health`).
-- Interactive tool testing: `npx @modelcontextprotocol/inspector npx @ttpears/gitlab-mcp-server`.
-- Debug logging: set `NODE_ENV=development` — startup prints the resolved config to stderr; production suppresses it.
-
-## Architecture
-
-Four source files, ~4.7k lines total — keep the layering in mind before adding code:
-
-- `src/config.ts` — `loadConfig()` reads env (`GITLAB_URL`, `GITLAB_TOKEN`, `GITLAB_READ_TOKEN`, `GITLAB_MAX_PAGE_SIZE`, `GITLAB_TIMEOUT`) into a zod-validated `Config`. `validateUserConfig()` parses per-request `userCredentials`. `GITLAB_TOKEN` and `GITLAB_READ_TOKEN` are mutually exclusive; setting both is a startup error. Old `GITLAB_AUTH_MODE` and `GITLAB_SHARED_ACCESS_TOKEN` env vars trigger a deprecation warning and are ignored.
-- `src/gitlab-client.ts` — `GitLabGraphQLClient` wraps `graphql-request` and is the only place that talks to GitLab. Every method accepts optional `userCredentials`; `getClient()` picks a token per the four-step rule (see Project Conventions below). Also hosts `fetchAllPages()` — the cursor-loop helper every `fetchAll` tool uses — and schema-introspection helpers.
-- `src/tools.ts` — Declarative tool registry: each entry is `{ name, description, inputSchema: zod, handler(args, client) }`. Handlers are thin — they validate input, call the client, and shape the response. This is where pagination defaults and sort enums live for each tool.
-- `src/index.ts` — `GitLabMCPServer` owns both transports. Stdio mode uses a single `Server` instance. HTTP mode (`MCP_TRANSPORT=http`) runs Express and maintains a `httpSessions` map keyed by session id, each with its own `Server` + `StreamableHTTPServerTransport` + per-session `userConfig`. The HTTP entry point accepts both `/` and `/mcp` (the latter exists for container setups). LibreChat sends credentials via `Authorization: Bearer <PAT>` and optional `X-GitLab-Url` headers — these are lifted into the session's `userConfig`. Idle sessions are reaped by `sessionCleanupInterval`.
-
-Key flow to understand for any tool change: `index.ts` routes the MCP call → looks up the tool in `tools.ts` → handler calls `gitlab-client.ts` → `getClient()` resolves a token in four steps: per-call user creds win, else `GITLAB_TOKEN` (for reads or writes), else `GITLAB_READ_TOKEN` (reads only), else error. The `requiresWrite` flag on each client method gates step 2 vs step 3.
-
-## Project conventions (from `.cursorrules`)
-
-- **Auth**: two role-named env vars determine fallback behavior. `GITLAB_TOKEN` (full access) is used for reads and writes when no per-call user creds are present. `GITLAB_READ_TOKEN` (read-only) is used only for reads; writes against it are always rejected. Setting both is a startup error. With neither set, every operation requires per-call user creds. Never silently write with a `GITLAB_READ_TOKEN`.
-- **Pagination**: list/search tools use `first`, `after`, and `fetchAll`. Defaults: `first=20`, cap each page at `config.maxPageSize`. `fetchAll=true` is bounded by `first`, honors `after`, and returns `{ nodes, totalFetched, hasMore, pageInfo }`. Missing connections or non-advancing cursors are errors. `search_gitlab` paginates projects and issues independently.
-- **Requests**: automatically retry reads only; never replay a mutation or REST write after an ambiguous failure. Timeouts and concurrency cover complete response bodies. Propagate the MCP request signal through `withRequestSignal()` so queueing, response reads, and retry backoff can be cancelled.
-- **HTTP identity**: every request must carry the same bearer credential as session initialization. A changed or missing credential returns HTTP 404 and requires reinitialization; test OAuth refresh with this behavior.
-- **Resource limits**: sessions and simultaneous HTTP requests are capped globally/per credential; request rates also have per-IP accounting. Outbound queue size/wait and decompressed response bytes are bounded. Never restore unbounded queues or response buffering.
-- **OAuth security**: one-time grants use atomic `KvStore.take()` in both storage backends. Revocation must invalidate the owning client's token family even during refresh. Recheck allowed groups at refresh, require explicit browser-bound client consent, and keep Redis records encrypted and token keys hashed. Redis key rotation requires a fresh namespace and reconnection; never fall back to plaintext state.
-- **Tool outputs**: declare a meaningful output schema for stable object results. The MCP handler validates it before returning `structuredContent`, preserving additional fields.
-- **Sort**: issues, MRs, and projects default to `UPDATED_DESC` for recency bias.
-- **State filters**: `all` → undefined; other values → uppercased GraphQL enum.
-- **GraphQL compatibility**: avoid fields that don't exist on self-hosted GitLab (e.g. `Project.defaultBranch`) — rely on introspection (`get_type_fields`) when in doubt. Reviewers apply to MRs only, not issues.
-- **Input hygiene**: trim search terms; reject empty strings for tools that require them. Null-guard group paths sent to project-only tools so errors are clear.
-- **Update tools** (`update_issue`, `update_merge_request`) are schema-aware and fall back to granular mutations when the combined mutation isn't supported.
-
-When adding a new tool, mirror an existing one of the same shape (list/search/update/discovery) — the patterns are consistent and the tool registry is the source of truth.
-
-- **CHANGELOG.md**: contributors update the `[Unreleased]` block in `CHANGELOG.md` for any PR that affects user-facing behavior, env vars, tools, or breaking changes. Pure refactors, doc-only PRs, and CI changes don't need an entry. At release time the `[Unreleased]` block is renamed to the new version with a date and a fresh `[Unreleased]` is started — manual one-line edit, not automated.
-
-## Release flow
-
-Releases are fully automated from `package.json` version bumps on `main`:
-
-1. Bump `version` in `package.json`, mirror it in `.claude-plugin/plugin.json`, **and** sync `package-lock.json` (`npm install --package-lock-only`), then merge to `main`. Forgetting the lockfile won't fail CI but leaves it drifted. The plugin manifest version is what Claude Code's plugin cache keys on — if it drifts from the npm version, installs via the marketplace point at a different release than users think.
-2. `.github/workflows/ci.yml` builds, then the `tag` job creates and pushes `vX.Y.Z` (skipped if the tag already exists).
-3. `.github/workflows/release.yml` fires on tag push and runs `npm publish --provenance` plus `gh release create --generate-notes`. Publish auth is via npm **trusted publishing** — the `id-token: write` permission lets the npm CLI exchange the GitHub Actions OIDC token for a short-lived registry token, so no `NPM_TOKEN` secret is needed. Setting `NODE_AUTH_TOKEN` to an empty or malformed value will break publish, so leave the env off entirely.
-
-The `tag` job checks out and pushes using `secrets.RELEASE_PAT` (a fine-grained PAT with **Contents: Read and write** on this repo, stored as a **repository** secret — environment secrets won't be visible to the job). This is required — tags pushed with the default `GITHUB_TOKEN` do not trigger downstream workflows, so `release.yml` would never fire. If the tag job fails with `403 denied to ttpears`, the PAT is missing the Contents:write grant or doesn't list this repo under its scoped repositories.
-
-Do not run `gh release create` or `npm publish` manually — bump the version, merge, and let CI handle both. If a release needs hand-holding, check `gh run list` for the failing workflow rather than reproducing steps locally.
-
-`main` is protected: changes ship via PR, not direct push.
+- `main` is protected; use PRs. Do not publish npm or create releases manually during routine work. Version bumps merged to main drive automated releases.
+- Preserve credential precedence, read-only fallback enforcement, host pinning, bounded resource use, and read-only retries. Never automatically replay an ambiguous write.
+- HTTP sessions bind to their initialization bearer. A changed/missing bearer requires fresh initialization; OAuth refresh rotates that bearer.
+- OAuth one-time state must use atomic `take`; preserve consent, encrypted storage, and family revocation during refresh races.
+- The tool registry in `src/tools.ts` is authoritative. Regenerate its documentation with `npm run docs:generate` after changing it.
+- Validate with `npm run typecheck`, relevant tests, `npm run check:docs`, and `npm run check:release`. CI runs Node.js 22/24 and real Redis tests; use `REDIS_TEST_URL` locally to include those tests.
+- Update `[Unreleased]` in the changelog for user-facing behavior, env, tool, or breaking changes. Documentation-only, CI-only, and pure refactoring changes need no changelog entry or version bump.
+- Keep secrets out of source, examples, stdout, and shared diagnostic output. Stdio stdout carries MCP protocol messages.
