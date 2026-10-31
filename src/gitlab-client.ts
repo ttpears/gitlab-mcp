@@ -1446,7 +1446,7 @@ export class GitLabGraphQLClient {
     }, userConfig);
   }
 
-  async globalSearchAll(searchTerm?: string, maxItems: number = 100, userConfig?: UserConfig): Promise<{
+  async globalSearchAll(searchTerm?: string, maxItems: number = 100, userConfig?: UserConfig, after?: string): Promise<{
     projects: PaginatedResult<any>;
     issues: PaginatedResult<any>;
   }> {
@@ -1467,8 +1467,8 @@ export class GitLabGraphQLClient {
       }
     `;
     const [projects, issues] = await Promise.all([
-      this.fetchAllPages(projectsQuery, { search: searchTerm || undefined }, 'projects', { maxItems, userConfig }),
-      this.fetchAllPages(issuesQuery, { search: searchTerm || undefined }, 'issues', { maxItems, userConfig }),
+      this.fetchAllPages(projectsQuery, { search: searchTerm || undefined }, 'projects', { maxItems, userConfig, after }),
+      this.fetchAllPages(issuesQuery, { search: searchTerm || undefined }, 'issues', { maxItems, userConfig, after }),
     ]);
     return { projects, issues };
   }

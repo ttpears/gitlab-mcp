@@ -563,13 +563,13 @@ const globalSearchTool: Tool = {
     searchTerm: z.string().optional().transform(val => val?.trim() || undefined).describe('Search term (leave empty for recent activity)'),
     first: z.number().min(1).max(100).default(20).describe('Number of results to retrieve per category'),
     after: z.string().optional().describe('Pagination cursor. To fetch the next page, pass the previous response pageInfo.endCursor here and repeat until pageInfo.hasNextPage is false. Paginating this way is the reliable path to complete results and accurate totals.'),
-    fetchAll: z.boolean().default(false).describe('Fetch multiple pages per category in one call, up to ~100 items each — NOT exhaustive. For complete results, leave this false and paginate via after (pageInfo.endCursor).'),
+    fetchAll: z.boolean().default(false).describe('Fetch multiple pages per category up to first items each (default 20, max 100), starting at after — NOT exhaustive. Each category returns its own pageInfo. Use search_projects and search_issues to continue those categories independently.'),
   })),
   handler: async (input, client, userConfig) => {
     const credentials = input.userCredentials ? validateUserConfig(input.userCredentials) : userConfig;
 
     if (input.fetchAll) {
-      const result = await client.globalSearchAll(input.searchTerm, undefined, credentials);
+      const result = await client.globalSearchAll(input.searchTerm, input.first, credentials, input.after);
       return {
         searchTerm: input.searchTerm,
         projects: result.projects,

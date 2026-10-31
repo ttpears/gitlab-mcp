@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import { GitLabGraphQLClient } from './gitlab-client.js';
 import { ConfigSchema } from './config.js';
+import { tools } from './tools.js';
 
 const info = (next: boolean, cursor: string | null) => ({ hasNextPage: next, endCursor: cursor, hasPreviousPage: false, startCursor: null });
 
@@ -36,5 +37,22 @@ describe('bounded pagination', () => {
     jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ data: { project: null } }), { headers: { 'Content-Type': 'application/json' } }));
     const client = new GitLabGraphQLClient(ConfigSchema.parse({ token: 'test' }));
     await expect(client.getIssues('missing/project', 20, undefined, true)).rejects.toThrow(/missing or inaccessible/);
+  });
+
+  it('applies the caller budget and starting cursor to both global-search categories', async () => {
+    const variables: any[] = [];
+    jest.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const { query, variables: v } = JSON.parse(init!.body as string);
+      variables.push(v);
+      const category = query.includes('globalSearchProjects') ? 'projects' : 'issues';
+      return new Response(JSON.stringify({ data: { [category]: { nodes: [{ id: '1' }], pageInfo: info(false, 'end') } } }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    const client = new GitLabGraphQLClient(ConfigSchema.parse({ token: 'test' }));
+    const tool = tools.find(t => t.name === 'search_gitlab')!;
+    const result = await tool.handler(tool.inputSchema.parse({ first: 3, after: 'start', fetchAll: true }), client);
+    expect(variables.map(v => [v.first, v.after])).toEqual([[3, 'start'], [3, 'start']]);
+    expect(result.totalResults).toBe(2);
   });
 });
