@@ -18,3 +18,15 @@ for (const source of [readme, compose]) {
   assert.ok(versions.every(version => version === pkg.version), 'Deployment examples must match package.json');
 }
 console.log(`Release metadata is consistent for ${pkg.version}`);
+
+for (const file of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+  const workflow = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8');
+  for (const [, action] of workflow.matchAll(/uses:\s*([^\s#]+)/g)) {
+    assert.match(action, /^[\w.-]+\/[\w./-]+@[a-f\d]{40}$/, `${file}: remote Actions must use immutable commit SHAs`);
+  }
+}
+const dockerfile = readFileSync(new URL('../Dockerfile', import.meta.url), 'utf8');
+for (const [, image] of dockerfile.matchAll(/^FROM\s+(\S+)/gm)) {
+  assert.match(image, /@sha256:[a-f\d]{64}$/, 'Container base images must be pinned by digest');
+}
+console.log('Action and container supply-chain pins are immutable');

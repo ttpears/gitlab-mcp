@@ -21,6 +21,12 @@ function fakeRes() {
     redirectedTo: undefined as string | undefined,
     statusCode: 200,
     sentBody: undefined as string | undefined,
+    cookies: {} as Record<string, string>,
+    headers: {} as Record<string, string>,
+    setHeader(name: string, value: string) { this.headers[name] = value; },
+    type(_value: string) { return this; },
+    cookie(name: string, value: string) { this.cookies[name] = value; return this; },
+    clearCookie(name: string) { delete this.cookies[name]; return this; },
     redirect(url: string) {
       this.redirectedTo = url;
     },
@@ -33,6 +39,14 @@ function fakeRes() {
       return this;
     },
   };
+}
+
+async function approveConsent(provider: GitLabOAuthProvider, res: ReturnType<typeof fakeRes>) {
+  if (!res.sentBody?.includes('name="consent"')) return;
+  const consent = res.sentBody.match(/name="consent" value="([^"]+)"/)![1];
+  const csrf = res.sentBody.match(/name="csrf" value="([^"]+)"/)![1];
+  const cookie = Object.entries(res.cookies).map(([key, value]) => `${key}=${value}`).join('; ');
+  await provider.handleConsent({ body: { consent, csrf, decision: 'allow' }, headers: { cookie } } as any, res as any);
 }
 
 const client: OAuthClientInformationFull = {
@@ -99,7 +113,7 @@ describe('GitLabOAuthProvider — authorize() brokers to GitLab', () => {
 describe('GitLabOAuthProvider — verifyAccessToken', () => {
   it('rejects unknown tokens', async () => {
     const p = new GitLabOAuthProvider(opts());
-    await expect(p.verifyAccessToken('bogus')).rejects.toThrow(/Unknown or revoked/);
+    await expect(p.verifyAccessToken('bogus')).rejects.toThrow(/Unknown.*revoked/);
     p.dispose();
   });
 });
@@ -141,6 +155,7 @@ describe('OAuth state store', () => {
       })) as typeof fetch;
     const cbRes = fakeRes();
     await a.handleGitLabCallback({ query: { code: 'c', state: brokerState } } as any, cbRes as any);
+    await approveConsent(a, cbRes);
     const mcpCode = new URL(cbRes.redirectedTo!).searchParams.get('code')!;
     const tokens = await a.exchangeAuthorizationCode(client, mcpCode);
     global.fetch = realFetch;
@@ -204,6 +219,7 @@ describe('GitLabOAuthProvider — group allow-list', () => {
     mockGitLab(userGroups);
     const cbRes = fakeRes();
     await p.handleGitLabCallback({ query: { code: 'glc', state: brokerState } } as any, cbRes as any);
+    await approveConsent(p, cbRes);
     p.dispose();
     return new URL(cbRes.redirectedTo!);
   }
@@ -256,6 +272,7 @@ describe('GitLabOAuthProvider — full brokered code exchange', () => {
     // GitLab redirects to our callback with code + broker state.
     const cbRes = fakeRes();
     await p.handleGitLabCallback({ query: { code: 'gitlab-code', state: brokerState } } as any, cbRes as any);
+    await approveConsent(p, cbRes);
     const mcpCode = new URL(cbRes.redirectedTo!).searchParams.get('code')!;
     expect(new URL(cbRes.redirectedTo!).searchParams.get('state')).toBe('st');
 
@@ -288,7 +305,7 @@ describe('GitLabOAuthProvider — full brokered code exchange', () => {
     const oldAccess = tokens.access_token;
     const rotated = await p.exchangeRefreshToken(client, tokens.refresh_token!);
     expect(rotated.access_token).not.toBe(oldAccess);
-    await expect(p.verifyAccessToken(oldAccess)).rejects.toThrow(/Unknown or revoked/);
+    await expect(p.verifyAccessToken(oldAccess)).rejects.toThrow(/Unknown.*revoked/);
     const info2 = await p.verifyAccessToken(rotated.access_token);
     expect((info2.extra as any).gitlabToken).toBe('glpat-user-2');
 

@@ -30,12 +30,38 @@ Field notes: [Two session bugs that broke my GitLab MCP server](https://hackyour
 
 ## Solo IDE
 
-### Upgrading to 3.0
+### Upgrading to 4.0
 
 Use Node.js 22 or later for npm/stdio installations. The container includes Node.js
-24. Update pinned images to `ghcr.io/ttpears/gitlab-mcp:3.0.0` and reconnect MCP
-clients after deployment. This release includes the previously unreleased
-Achievements tools and MCP/OAuth fixes listed in the changelog.
+24. Update pinned images to `ghcr.io/ttpears/gitlab-mcp:4.0.0` and reconnect MCP
+clients after deployment.
+
+OAuth users must sign in again after upgrading. After GitLab login, approve the
+specific MCP application and its exact redirect URI on the server's consent page.
+Codes and refresh tokens are single-use; logout revokes the associated token
+family. Group restrictions are rechecked at refresh, and token families require
+a fresh sign-in after 30 days. If GitLab or the group lookup fails during refresh,
+the server fails closed and requires a new sign-in.
+
+**Redis deployments:** set `OAUTH_STORAGE_ENCRYPTION_KEY` to a secret containing
+64 hexadecimal characters (32 random bytes); generate one with
+`openssl rand -hex 32` and store it in your secret manager. Every replica for the
+same issuer must use the same key. Use `rediss://` for TLS. Plain `redis://` is
+accepted for loopback, or with `REDIS_ALLOW_INSECURE=true` for an explicitly trusted
+private network; values remain encrypted in either case. Give this service a
+dedicated Redis ACL/namespace and a memory quota with `noeviction`. The new `v4`
+namespace intentionally does not read old plaintext OAuth state. Stop all v3
+replicas and remove only that issuer's old OAuth namespace before starting v4;
+otherwise old plaintext credentials remain until their TTL expires. Do not flush
+a shared Redis database. Rotating the
+encryption key requires a fresh `REDIS_KEY_PREFIX` and client reconnection.
+
+HTTP hosting now has finite session, request, and queue limits. Excess HTTP work
+returns 429 with `Retry-After`; queue overflow/wait expiry is a tool error. GitLab
+response bodies are limited to 16 MiB after decompression. Tune the settings below
+for large instances, and set `TRUST_PROXY` only to your actual proxy hops/subnets
+so per-IP limits use the real caller. OAuth in-memory state is capped at 10,000
+records; use a protected Redis store for larger persistent deployments.
 
 HTTP clients must send the same bearer credential on every request in a session.
 A changed or omitted credential returns HTTP 404; reinitialize after rotating a
@@ -149,7 +175,7 @@ Use `https://gitlab.com` for SaaS GitLab; use your own host for self-hosted.
 ```yaml
 services:
   gitlab-mcp:
-    image: ghcr.io/ttpears/gitlab-mcp:3.0.0
+    image: ghcr.io/ttpears/gitlab-mcp:4.0.0
     env_file:
       - .env
     networks:
@@ -213,7 +239,7 @@ as writes are gated on the user's token.
      -p 8008:8008 \
      -e GITLAB_URL=https://gitlab.example.com \
      --name gitlab-mcp \
-     ghcr.io/ttpears/gitlab-mcp:3.0.0
+     ghcr.io/ttpears/gitlab-mcp:4.0.0
    ```
 
    Or, when running alongside LibreChat in the same compose project, drop it
@@ -222,7 +248,7 @@ as writes are gated on the user's token.
    ```yaml
    services:
      gitlab-mcp:
-       image: ghcr.io/ttpears/gitlab-mcp:3.0.0
+       image: ghcr.io/ttpears/gitlab-mcp:4.0.0
        environment:
          GITLAB_URL: https://gitlab.example.com
        networks:
@@ -317,11 +343,14 @@ OAuth Authorization Server in front of GitLab:
    ```
 
 3. Point an MCP client at `https://gitlab-mcp.example.com/` — it discovers the
-   metadata, registers, and walks the user through GitLab sign-in automatically.
+   metadata, registers, and walks the user through GitLab sign-in and explicit
+   approval of that MCP client.
 
 `MCP_SERVER_URL` must be HTTPS (terminate TLS at your reverse proxy) and must
 match the host the GitLab redirect URI is registered under. Token/registration
-state is in-memory, so run a single instance (or add a shared store) per issuer.
+state is in-memory by default; use encrypted Redis state for persistence across
+restarts or multiple replicas. HTTP transport sessions remain process-local and
+reinitialize after a restart; use session affinity when running multiple replicas.
 
 ---
 
@@ -452,7 +481,15 @@ GitLab may require recipient acceptance before an award appears on a profile and
 | `GITLAB_ALLOW_SHARED_ESCAPE_HATCH` | Allow `execute_custom_query` / `execute_rest_read` / `execute_rest_write` to run on the shared token (otherwise they require per-call credentials) | `false` |
 | `GITLAB_MAX_PAGE_SIZE` | Maximum items per page (1–100) | `50` |
 | `GITLAB_TIMEOUT` | Request timeout in milliseconds | `30000` |
-| `GITLAB_MAX_CONCURRENCY` | Max concurrent in-flight requests to GitLab (excess queue, never rejected). `0` = unlimited | `16` |
+| `GITLAB_MAX_CONCURRENCY` | Max concurrent in-flight GitLab requests. Excess work enters a bounded queue. `0` = explicit unlimited mode | `16` |
+| `GITLAB_MAX_QUEUED_REQUESTS` | Maximum waiting GitLab requests; overflow returns a tool error | `128` |
+| `GITLAB_MAX_QUEUE_WAIT_MS` | Maximum queue wait before a tool error | `15000` |
+| `GITLAB_MAX_RESPONSE_BYTES` | Maximum buffered GitLab response bytes, including after decompression | `16777216` |
+| `MCP_MAX_SESSIONS` | Maximum active/initializing HTTP sessions | `1000` |
+| `MCP_MAX_SESSIONS_PER_IDENTITY` | HTTP sessions per bearer credential (anonymous sessions share one identity) | `10` |
+| `MCP_REQUESTS_PER_MINUTE` | Requests per credential; a per-IP limit of five times this also applies | `240` |
+| `MCP_MAX_INFLIGHT_PER_IDENTITY` | Simultaneous HTTP requests per credential; per-IP limit is five times this | `8` |
+| `MCP_MAX_INFLIGHT_REQUESTS` | Simultaneous MCP HTTP requests across credentials | `256` |
 | `GITLAB_ANALYTICS_MAX_PROJECTS` | Cap on projects scanned per group-analytics fan-out (logs when bounded) | `500` |
 | `GITLAB_MCP_PORT` | HTTP server port | `8008` |
 | `MCP_TRANSPORT` | Transport mode (`http` for LibreChat) | `stdio` |
@@ -467,6 +504,8 @@ GitLab may require recipient acceptance before an award appears on a profile and
 | `GITLAB_OAUTH_ALLOWED_GROUPS` | Restrict the connector to members of these GitLab groups (comma/space separated full-paths; subgroups included). Empty = any authenticated user | unset |
 | `REDIS_URL` | Back OAuth broker state with Redis (survives redeploys, enables >1 replica). Unset = in-memory | unset |
 | `REDIS_KEY_PREFIX` | Base namespace for Redis keys (issuer host is appended) | `gitlab-mcp` |
+| `OAUTH_STORAGE_ENCRYPTION_KEY` | Required for Redis: 64 hex characters encoding a secret 32-byte AES-GCM key, shared by replicas | unset |
+| `REDIS_ALLOW_INSECURE` | Explicitly allow non-TLS Redis on a trusted private network; encryption at rest remains required | `false` |
 
 `GITLAB_TOKEN` and `GITLAB_READ_TOKEN` are **mutually exclusive**; setting both is a startup error.
 

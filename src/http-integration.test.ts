@@ -1,8 +1,8 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GitLabMCPServer } from './index.js';
 import { LATEST_PROTOCOL_VERSION } from '@modelcontextprotocol/sdk/types.js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 describe('Streamable HTTP sessions and credentials', () => {
   let upstream: Server;
@@ -11,6 +11,7 @@ describe('Streamable HTTP sessions and credentials', () => {
   let endpoint: string;
   let previousEnv: NodeJS.ProcessEnv;
   let upstreamCalls: number;
+  let upstreamDelayMs: number;
 
   async function listen(server: Server) {
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -23,7 +24,12 @@ describe('Streamable HTTP sessions and credentials', () => {
     delete process.env.GITLAB_TOKEN;
     delete process.env.GITLAB_READ_TOKEN;
     delete process.env.GITLAB_MCP_OAUTH;
+    delete process.env.REDIS_URL;
+    delete process.env.OAUTH_STORAGE_ENCRYPTION_KEY;
+    delete process.env.REDIS_KEY_PREFIX;
+    delete process.env.REDIS_ALLOW_INSECURE;
     upstreamCalls = 0;
+    upstreamDelayMs = 0;
     upstream = createServer((req, res) => {
       upstreamCalls++;
       if (req.url === '/oauth/token') {
@@ -38,7 +44,8 @@ describe('Streamable HTTP sessions and credentials', () => {
       }
       const username = req.headers.authorization?.replace('Bearer ', '') || 'anonymous';
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ data: { currentUser: { id: 'gid://gitlab/User/1', username, name: username } } }));
+      const timer = setTimeout(() => res.end(JSON.stringify({ data: { currentUser: { id: 'gid://gitlab/User/1', username, name: username } } })), upstreamDelayMs);
+      res.once('close', () => clearTimeout(timer));
     });
     process.env.GITLAB_URL = await listen(upstream);
     service = new GitLabMCPServer();
@@ -85,6 +92,88 @@ describe('Streamable HTTP sessions and credentials', () => {
   }
 
   const currentUser = { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'get_current_user', arguments: {} } };
+
+  async function restartWith(settings: Record<string, string>) {
+    await service.close();
+    listener.closeAllConnections();
+    await new Promise<void>(resolve => listener.close(() => resolve()));
+    Object.assign(process.env, settings);
+    service = new GitLabMCPServer();
+    listener = createServer(await service.createHttpApp());
+    endpoint = await listen(listener);
+  }
+
+  const initBody = { jsonrpc: '2.0', id: 1, method: 'initialize', params: {
+    protocolVersion: LATEST_PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'limits-test', version: '1' },
+  } };
+
+  it('enforces the per-identity session cap even for concurrent anonymous initialization', async () => {
+    await restartWith({ MCP_MAX_SESSIONS_PER_IDENTITY: '2' });
+    const results = await Promise.all(Array.from({ length: 4 }, () => request(initBody)));
+    expect(results.filter(r => r.response.status === 200)).toHaveLength(2);
+    expect(results.filter(r => r.response.status === 429)).toHaveLength(2);
+    expect((await (await fetch(endpoint + '/health')).json() as { sessions: number }).sessions).toBe(2);
+  });
+
+  it('enforces the global session cap across different credentials', async () => {
+    await restartWith({ MCP_MAX_SESSIONS: '2' });
+    const results = await Promise.all(['a', 'b', 'c', 'd'].map(token => request(initBody, token)));
+    expect(results.filter(r => r.response.status === 200)).toHaveLength(2);
+    expect(results.filter(r => r.response.status === 429)).toHaveLength(2);
+  });
+
+  it('rate-limits a credential across sessions and both endpoint aliases', async () => {
+    await restartWith({ MCP_REQUESTS_PER_MINUTE: '2' });
+    const session = await initialize('alice');
+    const result = await request(currentUser, 'alice', session, '/');
+    expect(result.response.status).toBe(429);
+    expect(Number(result.response.headers.get('retry-after'))).toBeGreaterThan(0);
+    expect(upstreamCalls).toBe(0);
+  });
+
+  it('bounds simultaneous requests and releases the slot after completion', async () => {
+    await restartWith({ MCP_MAX_INFLIGHT_PER_IDENTITY: '1' });
+    const session = await initialize('alice');
+    upstreamDelayMs = 100;
+    const entered = new Promise<void>(resolve => upstream.once('request', () => resolve()));
+    const first = request(currentUser, 'alice', session);
+    await entered;
+    expect((await request(currentUser, 'alice', session)).response.status).toBe(429);
+    expect((await first).data.result.structuredContent.username).toBe('alice');
+    upstreamDelayMs = 0;
+    expect((await request(currentUser, 'alice', session)).response.status).toBe(200);
+  });
+
+  it('bounds total simultaneous requests across identities', async () => {
+    await restartWith({ MCP_MAX_INFLIGHT_REQUESTS: '1' });
+    const alice = await initialize('alice');
+    const bob = await initialize('bob');
+    upstreamDelayMs = 100;
+    const entered = new Promise<void>(resolve => upstream.once('request', () => resolve()));
+    const first = request(currentUser, 'alice', alice);
+    await entered;
+    expect((await request(currentUser, 'bob', bob)).response.status).toBe(429);
+    expect((await first).response.status).toBe(200);
+    upstreamDelayMs = 0;
+    expect((await request(currentUser, 'bob', bob)).response.status).toBe(200);
+  });
+
+  it('counts incomplete request bodies against the global concurrency budget', async () => {
+    await restartWith({ MCP_MAX_INFLIGHT_REQUESTS: '1' });
+    let closed!: () => void;
+    const responseClosed = new Promise<void>(resolve => { closed = resolve; });
+    const arrived = new Promise<void>(resolve => listener.once('request', (_req, res) => { res.once('close', closed); resolve(); }));
+    const upload = httpRequest(endpoint + '/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': '100', Authorization: 'Bearer upload' } });
+    upload.on('error', () => {});
+    upload.write('{');
+    try {
+      await arrived;
+      expect((await request(initBody, 'other')).response.status).toBe(429);
+      expect((await request(initBody, 'other', undefined, '/health')).response.status).toBe(429);
+      expect((await fetch(endpoint + '/health')).status).toBe(200);
+    } finally { upload.destroy(); await responseClosed; }
+    expect((await request(initBody, 'other')).response.status).toBe(200);
+  });
 
   it('isolates two users and advertises and enforces output schemas', async () => {
     const alice = await initialize('alice');
@@ -143,6 +232,11 @@ describe('Streamable HTTP sessions and credentials', () => {
     process.env.GITLAB_MCP_OAUTH = 'true';
     process.env.MCP_SERVER_URL = endpoint;
     process.env.GITLAB_OAUTH_CLIENT_ID = 'test-app';
+    if (process.env.REDIS_TEST_URL) {
+      process.env.REDIS_URL = process.env.REDIS_TEST_URL;
+      process.env.OAUTH_STORAGE_ENCRYPTION_KEY = 'e'.repeat(64);
+      process.env.REDIS_KEY_PREFIX = `http-test-${randomUUID()}`;
+    }
     service = new GitLabMCPServer();
     listener = createServer(await service.createHttpApp());
     await new Promise<void>(resolve => listener.listen(port, '127.0.0.1', resolve));
@@ -165,9 +259,25 @@ describe('Streamable HTTP sessions and credentials', () => {
     await redirect.text();
     const gitlabAuth = new URL(redirect.headers.get('location')!);
     const callback = await fetch(endpoint + '/gitlab/callback?' + new URLSearchParams({ code: 'gitlab-code', state: gitlabAuth.searchParams.get('state')! }), { redirect: 'manual' });
-    expect(callback.status).toBe(302);
-    await callback.text();
-    const clientRedirect = new URL(callback.headers.get('location')!);
+    expect(callback.status).toBe(200);
+    const page = await callback.text();
+    expect(callback.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    const consentId = page.match(/name="consent" value="([^"]+)"/)![1];
+    const csrf = page.match(/name="csrf" value="([^"]+)"/)![1];
+    const cookie = callback.headers.get('set-cookie')!.split(';')[0];
+    const unbound = await fetch(endpoint + '/oauth/consent', { method: 'POST', redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Origin: endpoint },
+      body: new URLSearchParams({ consent: consentId, csrf, decision: 'allow' }),
+    });
+    expect(unbound.status).toBe(400);
+    await unbound.text();
+    const approved = await fetch(endpoint + '/oauth/consent', { method: 'POST', redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: cookie, Origin: endpoint },
+      body: new URLSearchParams({ consent: consentId, csrf, decision: 'allow' }),
+    });
+    expect(approved.status).toBe(302);
+    await approved.text();
+    const clientRedirect = new URL(approved.headers.get('location')!);
     expect(clientRedirect.searchParams.get('state')).toBe('test-state');
 
     async function exchange(params: Record<string, string>) {
@@ -180,6 +290,11 @@ describe('Streamable HTTP sessions and credentials', () => {
       return result;
     }
 
+    const badPkce = await fetch(endpoint + '/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: registration.client_id, grant_type: 'authorization_code', code: clientRedirect.searchParams.get('code')!, code_verifier: 'b'.repeat(64), redirect_uri: 'https://client.example/callback' }),
+    });
+    expect(badPkce.status).toBe(400);
+    await badPkce.text();
     const tokens = await exchange({ grant_type: 'authorization_code', code: clientRedirect.searchParams.get('code')!, code_verifier: verifier, redirect_uri: 'https://client.example/callback' });
     const session = await initialize(tokens.access_token);
     expect((await request(currentUser, tokens.access_token, session)).data.result.structuredContent.username).toBe('oauth-alice');

@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `npm run build` — TypeScript compile to `dist/` (tsc, ESM).
 - `npm run check:release` — Verify package, lockfile, plugin, changelog, and deployment image versions agree.
 - `npm run build:mcpb` — Build and package the Claude Desktop bundle.
+- `REDIS_TEST_URL=redis://127.0.0.1:6379 npm test` — Include real Redis encryption, atomic consumption, and cross-replica revocation tests. CI always supplies Redis.
 - `npm run dev` — Run the server directly from `src/` via `tsx` (stdio transport by default).
 - `npm start` — Run the compiled server from `dist/index.js`.
 - `npm test` — Jest. Run a single test with `npx jest <path>` or `npx jest -t "<name>"`.
@@ -31,6 +32,8 @@ Key flow to understand for any tool change: `index.ts` routes the MCP call → l
 - **Pagination**: list/search tools use `first`, `after`, and `fetchAll`. Defaults: `first=20`, cap each page at `config.maxPageSize`. `fetchAll=true` is bounded by `first`, honors `after`, and returns `{ nodes, totalFetched, hasMore, pageInfo }`. Missing connections or non-advancing cursors are errors. `search_gitlab` paginates projects and issues independently.
 - **Requests**: automatically retry reads only; never replay a mutation or REST write after an ambiguous failure. Timeouts and concurrency cover complete response bodies. Propagate the MCP request signal through `withRequestSignal()` so queueing, response reads, and retry backoff can be cancelled.
 - **HTTP identity**: every request must carry the same bearer credential as session initialization. A changed or missing credential returns HTTP 404 and requires reinitialization; test OAuth refresh with this behavior.
+- **Resource limits**: sessions and simultaneous HTTP requests are capped globally/per credential; request rates also have per-IP accounting. Outbound queue size/wait and decompressed response bytes are bounded. Never restore unbounded queues or response buffering.
+- **OAuth security**: one-time grants use atomic `KvStore.take()` in both storage backends. Revocation must invalidate the owning client's token family even during refresh. Recheck allowed groups at refresh, require explicit browser-bound client consent, and keep Redis records encrypted and token keys hashed. Redis key rotation requires a fresh namespace and reconnection; never fall back to plaintext state.
 - **Tool outputs**: declare a meaningful output schema for stable object results. The MCP handler validates it before returning `structuredContent`, preserving additional fields.
 - **Sort**: issues, MRs, and projects default to `UPDATED_DESC` for recency bias.
 - **State filters**: `all` → undefined; other values → uppercased GraphQL enum.

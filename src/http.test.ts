@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { GitLabGraphQLClient } from './gitlab-client.js';
 import { ConfigSchema } from './config.js';
+import { gzipSync } from 'node:zlib';
 
 describe('response body deadlines and concurrency over real HTTP', () => {
   let upstream: Server;
@@ -10,20 +11,28 @@ describe('response body deadlines and concurrency over real HTTP', () => {
   let active: number;
   let peak: number;
   let calls: number;
+  let largeBody: boolean;
+  let compressed: boolean;
+  let declaredLength: boolean;
 
   beforeEach(async () => {
     bodyDelay = 30;
     active = peak = calls = 0;
+    largeBody = compressed = declaredLength = false;
     upstream = createServer((req, res) => {
       calls++;
       active++;
       peak = Math.max(peak, active);
       res.on('close', () => { active--; });
-      res.writeHead(200, { 'Content-Type': 'application/json' });
+      const payload = largeBody ? JSON.stringify({ data: 'x'.repeat(2048) }) : JSON.stringify(req.url === '/api/graphql'
+        ? { data: { currentUser: { username: 'alice' } } } : { version: '19.0' });
+      const body = compressed ? gzipSync(payload) : Buffer.from(payload);
+      res.writeHead(200, { 'Content-Type': 'application/json',
+        ...(compressed ? { 'Content-Encoding': 'gzip' } : {}),
+        ...(declaredLength ? { 'Content-Length': String(body.byteLength) } : {}),
+      });
       res.flushHeaders();
-      const timer = setTimeout(() => res.end(JSON.stringify(req.url === '/api/graphql'
-        ? { data: { currentUser: { username: 'alice' } } }
-        : { version: '19.0' })), bodyDelay);
+      const timer = setTimeout(() => res.end(body), bodyDelay);
       res.on('close', () => clearTimeout(timer));
     });
     await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
@@ -68,5 +77,16 @@ describe('response body deadlines and concurrency over real HTTP', () => {
     setTimeout(() => controller.abort(), 100);
     await assertion;
     expect(calls).toBe(1);
+  });
+
+  it.each(['declared', 'chunked', 'compressed'])('limits %s response size, including decompressed bytes', async mode => {
+    largeBody = true;
+    declaredLength = mode === 'declared' || mode === 'compressed';
+    compressed = mode === 'compressed';
+    const c = new GitLabGraphQLClient(ConfigSchema.parse({ gitlabUrl: url, token: 'test', maxResponseBytes: 1024, allowSharedEscapeHatch: true }));
+    await expect(c.executeRestRead('/version')).rejects.toThrow(/1024-byte limit/);
+    expect(calls).toBe(1);
+    largeBody = compressed = declaredLength = false;
+    await expect(c.executeRestRead('/version')).resolves.toEqual({ version: '19.0' });
   });
 });
