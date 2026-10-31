@@ -4,7 +4,7 @@
 # Configure LibreChat with librechat.example.yml; send the PAT on every request.
 services:
   gitlab-mcp:
-    image: ghcr.io/ttpears/gitlab-mcp:3.0.0
+    image: ghcr.io/ttpears/gitlab-mcp:4.0.0
     env_file:
       - .env
     environment:

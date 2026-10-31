@@ -3,7 +3,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { realpathSync, readFileSync } from 'node:fs';
 import { URL, fileURLToPath } from 'url';
 import express from 'express';
@@ -26,7 +26,8 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
-import { loadConfig } from './config.js';
+import { loadConfig, type Config } from './config.js';
+import { credentialIdentity, requestLimits } from './security.js';
 import { GitLabGraphQLClient } from './gitlab-client.js';
 import { tools } from './tools.js';
 import { GitLabOAuthProvider, buildOAuthOptions, createOAuthStore } from './oauth.js';
@@ -131,10 +132,13 @@ export class GitLabMCPServer {
   private sessionCleanupInterval?: NodeJS.Timeout;
   private oauthProvider?: GitLabOAuthProvider;
   private httpListener?: HttpServer;
+  private readonly config: Config;
+  private readonly pendingSessions = new Map<string, number>();
 
   constructor() {
     // Initialize GitLab client using environment configuration
     const config = loadConfig();
+    this.config = config;
     this.gitlabClient = new GitLabGraphQLClient(config);
 
     // Log configuration on startup (for debugging)
@@ -555,7 +559,7 @@ Provide direct links and a brief summary of the most relevant results.`,
         console.error(`[MCP] Request: ${req.method} session=${sessionIdHeader || 'none'}`);
       }
 
-      const identity = createHash('sha256').update(req.headers.authorization || '').digest('hex');
+      const identity = credentialIdentity(req);
       const route = classifySessionRequest({
         hasKnownSession: !!sessionIdHeader && this.httpSessions.has(sessionIdHeader),
         sessionIdPresent: !!sessionIdHeader,
@@ -604,40 +608,30 @@ Provide direct links and a brief summary of the most relevant results.`,
 
       // New session initialization (a POST carrying an initialize request)
       if (route === 'create') {
-        // If we have too many sessions, clean up old ones immediately
-        if (this.httpSessions.size > 10) {
-          const now = Date.now();
-          const oldSessions: string[] = [];
-
-          // Find sessions older than 5 minutes
-          for (const [sessionId, data] of this.httpSessions.entries()) {
-            if (now - data.lastActivity > 5 * 60 * 1000) {
-              oldSessions.push(sessionId);
-            }
-          }
-
-          // Close and remove old sessions
-          for (const sessionId of oldSessions) {
-            const data = this.httpSessions.get(sessionId);
-            if (data) {
-              console.error(`[MCP] Force-closing old session ${sessionId}`);
-              data.server.close().catch(() => {});
-              data.transport.close().catch(() => {});
-              this.httpSessions.delete(sessionId);
-            }
-          }
-
-          if (oldSessions.length > 0) {
-            console.error(`[MCP] Emergency cleanup: removed ${oldSessions.length} old sessions (total now: ${this.httpSessions.size})`);
-          }
+        const pending = [...this.pendingSessions.values()].reduce((a, b) => a + b, 0);
+        const owned = [...this.httpSessions.values()].filter(session => session.identity === identity).length;
+        if (this.httpSessions.size + pending >= this.config.maxHttpSessions ||
+            owned + (this.pendingSessions.get(identity) || 0) >= this.config.maxSessionsPerIdentity) {
+          res.setHeader('Retry-After', '60');
+          res.status(429).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Session limit reached; close an existing session or retry later' }, id: null });
+          return;
         }
-
+        this.pendingSessions.set(identity, (this.pendingSessions.get(identity) || 0) + 1);
+        let reservationReleased = false;
+        const releaseReservation = () => {
+          if (reservationReleased) return;
+          reservationReleased = true;
+          const remaining = (this.pendingSessions.get(identity) || 1) - 1;
+          if (remaining) this.pendingSessions.set(identity, remaining);
+          else this.pendingSessions.delete(identity);
+        };
         // Create a new Server instance for this session
         const server = this.createServer();
 
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (sessionId: string) => {
+            releaseReservation();
             const userConfig = this.extractUserCredentials(req);
             this.httpSessions.set(sessionId, {
               server,
@@ -659,8 +653,13 @@ Provide direct links and a brief summary of the most relevant results.`,
           console.error(`[MCP] Transport error for session ${transport.sessionId}:`, error.message);
         };
 
-        await server.connect(transport);
-        await transport.handleRequest(req as any, res as any, (req as any).body);
+        try {
+          await server.connect(transport);
+          await transport.handleRequest(req as any, res as any, (req as any).body);
+        } finally {
+          releaseReservation();
+          if (!transport.sessionId || !this.httpSessions.has(transport.sessionId)) await server.close();
+        }
         return;
       }
 
@@ -693,6 +692,11 @@ Provide direct links and a brief summary of the most relevant results.`,
 
     // Disable X-Powered-By header
     app.disable('x-powered-by');
+    app.use((_req, res, next) => {
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      next();
+    });
 
     // Trust the reverse proxy (e.g. traefik) when hosted behind one, so req.ip
     // and the SDK OAuth endpoints' per-IP rate limiting use the real client IP
@@ -712,16 +716,6 @@ Provide direct links and a brief summary of the most relevant results.`,
       ...(process.env.MCP_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean),
     ]);
     app.use(createOriginGuard(allowedOrigins));
-
-    // Parse JSON bodies - but NOT for /message endpoint (SSE transport needs raw stream)
-    app.use((req, res, next) => {
-      if (req.path === '/message') {
-        // Skip JSON parsing for SSE message endpoint
-        next();
-      } else {
-        express.json()(req, res, next);
-      }
-    });
 
     // CORS and headers
     app.use((req, res, next) => {
@@ -747,6 +741,13 @@ Provide direct links and a brief summary of the most relevant results.`,
       next();
     });
 
+    // Account for work before parsing request bodies so slow/incomplete uploads
+    // cannot bypass concurrency limits. Liveness remains available when busy.
+    const limits = requestLimits(config.httpRequestsPerMinute, config.maxHttpRequestsPerIdentity, config.maxHttpInflight);
+    app.use((req, res, next) => req.path === '/health' && req.method === 'GET' &&
+      !req.headers['content-length'] && !req.headers['transfer-encoding'] ? next() : limits(req, res, next));
+    app.use((req, res, next) => req.path === '/message' ? next() : express.json({ limit: '100kb' })(req, res, next));
+
     // OAuth 2.1 brokered auth (optional). When GITLAB_MCP_OAUTH is enabled the
     // server becomes its own Authorization Server in front of GitLab: it
     // advertises protected-resource + AS metadata, supports Dynamic Client
@@ -770,6 +771,8 @@ Provide direct links and a brief summary of the most relevant results.`,
       const oauthStore = await createOAuthStore({
         redisUrl: process.env.REDIS_URL,
         keyPrefix: `${process.env.REDIS_KEY_PREFIX || 'gitlab-mcp'}:${issuerUrl.host}`,
+        encryptionKey: process.env.OAUTH_STORAGE_ENCRYPTION_KEY,
+        allowInsecureRedis: /^(true|1|yes|on)$/i.test(process.env.REDIS_ALLOW_INSECURE || ''),
       });
       this.oauthProvider = new GitLabOAuthProvider(oauthOptions, oauthStore);
       if (process.env.REDIS_URL) {
@@ -789,6 +792,8 @@ Provide direct links and a brief summary of the most relevant results.`,
 
       // Fixed GitLab callback (the only redirect URI registered in GitLab).
       app.get(oauthOptions.callbackPath, (req, res) => this.oauthProvider!.handleGitLabCallback(req, res));
+      app.post('/oauth/consent', requestLimits(60, 8), express.urlencoded({ extended: false, limit: '8kb' }),
+        (req, res) => this.oauthProvider!.handleConsent(req, res));
 
       // Gate the MCP endpoints; 401s carry WWW-Authenticate → resource metadata.
       mcpGuards.push(

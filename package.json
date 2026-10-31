@@ -1,6 +1,6 @@
 {
   "name": "@ttpears/gitlab-mcp-server",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "GitLab MCP Server with GraphQL discovery",
   "main": "dist/index.js",
   "module": "./src/index.ts",
@@ -60,5 +60,9 @@
   ],
   "engines": {
     "node": ">=22"
+  },
+  "overrides": {
+    "glob": "^14.0.3",
+    "minimatch": "^11.0.3"
   }
 }

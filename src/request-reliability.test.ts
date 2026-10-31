@@ -97,3 +97,28 @@ it('removes cancelled requests from the concurrency queue', async () => {
   const nextRelease = await semaphore.acquire();
   nextRelease();
 });
+
+it('rejects queue overflow without retaining additional waiters', async () => {
+  const semaphore = new Semaphore(1, 1);
+  const release = await semaphore.acquire();
+  const waiting = semaphore.acquire();
+  await expect(semaphore.acquire()).rejects.toMatchObject({ code: 'OVERLOADED' });
+  expect(semaphore.queued).toBe(1);
+  release();
+  (await waiting)();
+  expect(semaphore.queued).toBe(0);
+});
+
+it('expires queued requests and leaves capacity usable', async () => {
+  jest.useFakeTimers();
+  try {
+    const semaphore = new Semaphore(1, 1, 100);
+    const release = await semaphore.acquire();
+    const assertion = expect(semaphore.acquire()).rejects.toMatchObject({ code: 'OVERLOADED' });
+    await jest.advanceTimersByTimeAsync(100);
+    await assertion;
+    expect(semaphore.queued).toBe(0);
+    release();
+    (await semaphore.acquire())();
+  } finally { jest.useRealTimers(); }
+});

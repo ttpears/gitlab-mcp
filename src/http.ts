@@ -3,6 +3,7 @@ export async function fetchBuffered(
   url: string | URL,
   options: RequestInit,
   timeoutMs: number,
+  maxBytes = 16 * 1024 * 1024,
 ): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
@@ -15,7 +16,32 @@ export async function fetchBuffered(
     : controller.signal;
   try {
     const response = await fetch(url, { ...options, signal });
-    const body = response.body === null ? null : await response.arrayBuffer();
+    const length = Number(response.headers.get('content-length'));
+    if (Number.isFinite(length) && length > maxBytes) {
+      await response.body?.cancel();
+      throw new Error(`GitLab response exceeds the ${maxBytes}-byte limit`);
+    }
+    let body: Uint8Array<ArrayBuffer> | null = null;
+    if (response.body) {
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          bytes += value.byteLength;
+          if (bytes > maxBytes) {
+            await reader.cancel();
+            throw new Error(`GitLab response exceeds the ${maxBytes}-byte limit`);
+          }
+          chunks.push(value);
+        }
+      } finally { reader.releaseLock(); }
+      body = new Uint8Array(bytes);
+      let offset = 0;
+      for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
+    }
     return new Response(body, {
       status: response.status,
       statusText: response.statusText,

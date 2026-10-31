@@ -72,13 +72,13 @@ export interface PaginatedResult<T> {
 
 /**
  * Async counting semaphore. `acquire()` resolves immediately while capacity
- * remains, otherwise queues (FIFO) until a holder releases — it throttles, it
- * never rejects. A non-positive limit means unlimited.
+ * remains, otherwise queues FIFO within a capacity/wait budget. Overflow and
+ * expiry reject explicitly. A non-positive concurrency limit means unlimited.
  */
 export class Semaphore {
   private active = 0;
   private readonly waiters: Array<() => void> = [];
-  constructor(private readonly max: number) {}
+  constructor(private readonly max: number, private readonly maxQueued = 128, private readonly waitMs = 15000) {}
 
   async acquire(signal?: AbortSignal): Promise<() => void> {
     signal?.throwIfAborted();
@@ -87,17 +87,28 @@ export class Semaphore {
       this.active++;
       return () => this.releaseOne();
     }
+    if (this.waiters.length >= this.maxQueued) {
+      throw new GitLabAPIError('GitLab request queue is full; retry later', { code: 'OVERLOADED', statusCode: 503 });
+    }
     return new Promise<() => void>((resolve, reject) => {
+      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); };
       const grant = () => {
-        signal?.removeEventListener('abort', cancel);
+        cleanup();
         this.active++;
         resolve(() => this.releaseOne());
       };
       const cancel = () => {
         const index = this.waiters.indexOf(grant);
         if (index !== -1) this.waiters.splice(index, 1);
+        cleanup();
         reject(signal?.reason);
       };
+      const timer = setTimeout(() => {
+        const index = this.waiters.indexOf(grant);
+        if (index !== -1) this.waiters.splice(index, 1);
+        cleanup();
+        reject(new GitLabAPIError('GitLab request queue wait limit exceeded; retry later', { code: 'OVERLOADED', statusCode: 503 }));
+      }, this.waitMs);
       this.waiters.push(grant);
       signal?.addEventListener('abort', cancel, { once: true });
     });
@@ -125,7 +136,7 @@ export class GitLabGraphQLClient {
   private schema: any = null;
   private userClients: Map<string, GraphQLClient> = new Map();
   // Soft cost guard: bounds concurrent in-flight requests to GitLab across all
-  // tools/users. Excess requests queue (never rejected). 0 = unlimited.
+  // tools/users. Excess requests enter a bounded queue. 0 = explicit unlimited mode.
   private requestGate: Semaphore;
   private readonly requestSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -135,7 +146,7 @@ export class GitLabGraphQLClient {
 
   constructor(config: Config) {
     this.config = config;
-    this.requestGate = new Semaphore(config.maxConcurrency);
+    this.requestGate = new Semaphore(config.maxConcurrency, config.maxQueuedRequests, config.maxQueueWaitMs);
 
     if (config.token) {
       this.fullAccessClient = this.createClient(config.gitlabUrl, config.token);
@@ -174,7 +185,7 @@ export class GitLabGraphQLClient {
     const signal = signals.length ? AbortSignal.any(signals) : undefined;
     const release = await this.requestGate.acquire(signal);
     try {
-      return await fetchBuffered(url, { ...options, signal }, timeoutMs);
+      return await fetchBuffered(url, { ...options, signal }, timeoutMs, this.config.maxResponseBytes);
     } finally {
       release();
     }

@@ -1,5 +1,7 @@
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { fetchBuffered } from './http.js';
+import { InMemoryKvStore, type KvStore } from './oauth-store.js';
+export { InMemoryKvStore, RedisKvStore, EncryptedKvStore, createOAuthStore, type KvStore } from './oauth-store.js';
 import type { Request, Response } from 'express';
 import type {
   OAuthServerProvider,
@@ -16,6 +18,7 @@ import {
   InvalidGrantError,
   InvalidTargetError,
   InvalidTokenError,
+  InvalidClientMetadataError,
   ServerError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 
@@ -40,9 +43,8 @@ import {
 
 const AUTH_FLOW_TTL_MS = 10 * 60 * 1000; // pending-auth and one-time codes live 10 min
 const DEFAULT_TOKEN_TTL_MS = 2 * 60 * 60 * 1000; // fallback when GitLab omits expires_in
-const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // cap idle refresh tokens at 30 days
+const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // absolute token-family lifetime
 const CLIENT_TTL_MS = 90 * 24 * 60 * 60 * 1000; // DCR client registrations
-const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
 export interface GitLabOAuthOptions {
   /** GitLab base URL without the /api suffix, e.g. https://gitlab.com */
@@ -86,9 +88,11 @@ interface IssuedCode {
   gitlabAccessToken: string;
   gitlabRefreshToken?: string;
   gitlabExpiresAt: number;
+  clientState?: string;
 }
 
 interface AccessTokenRecord {
+  familyId: string;
   clientId: string;
   scopes: string[];
   resource?: string;
@@ -97,13 +101,24 @@ interface AccessTokenRecord {
 }
 
 interface RefreshTokenRecord {
+  familyId: string;
   clientId: string;
   scopes: string[];
   resource?: string;
   gitlabRefreshToken: string;
   /** The MCP access token minted alongside this refresh token, so rotation can revoke it. */
-  accessToken: string;
+  accessTokenHash: string;
 }
+
+interface ConsentRecord {
+  grant: IssuedCode;
+  csrfHash: string;
+  browserHash: string;
+}
+interface TokenFamily { clientId: string }
+const tokenHash = (token: string) => createHash('sha256').update(token).digest('hex');
+const tokenKey = (kind: 'at' | 'rt' | 'code', token: string) => `${kind}:${tokenHash(token)}`;
+const escapeHtml = (value: string) => value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]!));
 
 function base64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -117,107 +132,6 @@ function pkceChallenge(verifier: string): string {
   return base64url(createHash('sha256').update(verifier).digest());
 }
 
-// --- storage -----------------------------------------------------------------
-
-/**
- * Minimal async key/value store with per-key TTL. JSON-serializable values.
- * Keys are namespaced by the store's prefix so multiple MCP servers can share
- * one Redis safely.
- */
-export interface KvStore {
-  get<T>(key: string): Promise<T | undefined>;
-  set<T>(key: string, value: T, ttlMs: number): Promise<void>;
-  del(key: string): Promise<void>;
-  dispose(): void;
-}
-
-/** In-process store with lazy expiry on read plus a periodic sweep. */
-export class InMemoryKvStore implements KvStore {
-  private readonly map = new Map<string, { value: unknown; expiresAt: number }>();
-  private readonly prefix: string;
-  private sweep?: NodeJS.Timeout;
-
-  constructor(prefix = 'gitlab-mcp') {
-    this.prefix = prefix;
-    this.sweep = setInterval(() => {
-      const now = Date.now();
-      for (const [k, v] of this.map) if (v.expiresAt < now) this.map.delete(k);
-    }, SWEEP_INTERVAL_MS);
-    this.sweep.unref?.();
-  }
-
-  async get<T>(key: string): Promise<T | undefined> {
-    const entry = this.map.get(this.prefix + key);
-    if (!entry) return undefined;
-    if (entry.expiresAt < Date.now()) {
-      this.map.delete(this.prefix + key);
-      return undefined;
-    }
-    return entry.value as T;
-  }
-
-  async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
-    this.map.set(this.prefix + key, { value, expiresAt: Date.now() + ttlMs });
-  }
-
-  async del(key: string): Promise<void> {
-    this.map.delete(this.prefix + key);
-  }
-
-  dispose(): void {
-    if (this.sweep) clearInterval(this.sweep);
-  }
-}
-
-interface RedisLike {
-  get(key: string): Promise<string | null>;
-  set(key: string, value: string, mode: string, ttl: number): Promise<unknown>;
-  del(key: string): Promise<unknown>;
-  quit(): Promise<unknown>;
-}
-
-/** Redis-backed store. TTL is enforced by Redis (PX), so no sweep needed. */
-export class RedisKvStore implements KvStore {
-  constructor(private readonly client: RedisLike, private readonly prefix: string) {}
-
-  async get<T>(key: string): Promise<T | undefined> {
-    const raw = await this.client.get(this.prefix + key);
-    return raw == null ? undefined : (JSON.parse(raw) as T);
-  }
-
-  async set<T>(key: string, value: T, ttlMs: number): Promise<void> {
-    await this.client.set(this.prefix + key, JSON.stringify(value), 'PX', Math.max(1, Math.floor(ttlMs)));
-  }
-
-  async del(key: string): Promise<void> {
-    await this.client.del(this.prefix + key);
-  }
-
-  dispose(): void {
-    void this.client.quit();
-  }
-}
-
-/**
- * Build the OAuth state store. When `redisUrl` is set, connects ioredis (loaded
- * lazily so non-Redis deployments don't pay for it); otherwise in-memory.
- * `keyPrefix` should include the issuer so co-tenant MCPs don't collide while
- * replicas of the same issuer DO share state.
- */
-export async function createOAuthStore(opts: {
-  redisUrl?: string;
-  keyPrefix: string;
-}): Promise<KvStore> {
-  const prefix = `${opts.keyPrefix}:`;
-  if (opts.redisUrl) {
-    const mod: any = await import('ioredis');
-    const Redis = mod.default || mod;
-    const client = new Redis(opts.redisUrl, { maxRetriesPerRequest: 2, lazyConnect: false }) as RedisLike;
-    return new RedisKvStore(client, prefix);
-  }
-  return new InMemoryKvStore(prefix);
-}
-
 /** Dynamic Client Registration store backed by the KvStore. */
 class KvClientsStore implements OAuthRegisteredClientsStore {
   constructor(private readonly store: KvStore) {}
@@ -227,6 +141,7 @@ class KvClientsStore implements OAuthRegisteredClientsStore {
   }
 
   async registerClient(client: OAuthClientInformationFull): Promise<OAuthClientInformationFull> {
+    if (Buffer.byteLength(JSON.stringify(client)) > 16384) throw new InvalidClientMetadataError('Client registration metadata exceeds the 16 KiB limit');
     await this.store.set(`client:${client.client_id}`, client, CLIENT_TTL_MS);
     return client;
   }
@@ -329,12 +244,11 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
       return;
     }
 
-    const pending = await this.store.get<PendingAuth>(`pending:${brokerState}`);
+    const pending = await this.store.take<PendingAuth>(`pending:${brokerState}`);
     if (!pending) {
       res.status(400).type('text/plain').send('Authorization request expired or unknown. Please restart sign-in.');
       return;
     }
-    await this.store.del(`pending:${brokerState}`);
 
     let tokens;
     try {
@@ -373,169 +287,169 @@ export class GitLabOAuthProvider implements OAuthServerProvider {
       }
     }
 
-    const mcpCode = randomToken();
-    await this.store.set<IssuedCode>(
-      `code:${mcpCode}`,
-      {
-        clientId: pending.clientId,
-        clientCodeChallenge: pending.clientCodeChallenge,
-        redirectUri: pending.clientRedirectUri,
-        scopes: pending.scopes,
-        resource: pending.resource,
-        gitlabAccessToken: tokens.access_token,
-        gitlabRefreshToken: tokens.refresh_token,
+    const consentId = randomToken();
+    const csrf = randomToken();
+    const browser = randomToken();
+    await this.store.set<ConsentRecord>(`consent:${consentId}`, {
+      csrfHash: tokenHash(csrf), browserHash: tokenHash(browser),
+      grant: {
+        clientId: pending.clientId, clientCodeChallenge: pending.clientCodeChallenge,
+        redirectUri: pending.clientRedirectUri, clientState: pending.clientState,
+        scopes: pending.scopes, resource: pending.resource,
+        gitlabAccessToken: tokens.access_token, gitlabRefreshToken: tokens.refresh_token,
         gitlabExpiresAt: Date.now() + (tokens.expires_in ? tokens.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS),
       },
-      AUTH_FLOW_TTL_MS
-    );
+    }, AUTH_FLOW_TTL_MS);
+    const secure = new URL(this.opts.serverUrl).protocol === 'https:';
+    res.cookie(secure ? '__Host-mcp-consent' : 'mcp-consent', browser, {
+      httpOnly: true, secure, sameSite: 'strict', path: '/', maxAge: AUTH_FLOW_TTL_MS,
+    });
+    const registered = await this.clients.getClient(pending.clientId);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.type('html').send(`<!doctype html><html lang="en"><meta charset="utf-8"><title>Authorize GitLab access</title>
+<h1>Allow this application to access GitLab?</h1>
+<p>Application: <strong>${escapeHtml(registered?.client_name || pending.clientId)}</strong></p>
+<p>Client ID: ${escapeHtml(pending.clientId)}</p>
+<p>Authorization will be sent to: <strong>${escapeHtml(pending.clientRedirectUri)}</strong></p>
+<p>GitLab permissions: ${escapeHtml(pending.scopes.join(' '))}</p>
+<p>Approve only if you recognize this application and requested this connection.</p>
+<form method="post" action="/oauth/consent"><input type="hidden" name="consent" value="${consentId}">
+<input type="hidden" name="csrf" value="${csrf}"><button name="decision" value="allow">Allow access</button>
+<button name="decision" value="deny">Deny</button></form></html>`);
+  }
 
-    const redirect = new URL(pending.clientRedirectUri);
-    redirect.searchParams.set('code', mcpCode);
-    if (pending.clientState) redirect.searchParams.set('state', pending.clientState);
+  async handleConsent(req: Request, res: Response): Promise<void> {
+    const { consent, csrf, decision } = req.body || {};
+    const invalid = () => res.status(400).type('text/plain').send('Consent request is invalid or expired. Restart sign-in.');
+    if (typeof consent !== 'string' || typeof csrf !== 'string' || !['allow', 'deny'].includes(decision)) { invalid(); return; }
+    const record = await this.store.get<ConsentRecord>(`consent:${consent}`);
+    const secure = new URL(this.opts.serverUrl).protocol === 'https:';
+    const cookieName = secure ? '__Host-mcp-consent' : 'mcp-consent';
+    const cookie = (req.headers.cookie || '').split(';').map(value => value.trim()).find(value => value.startsWith(cookieName + '='))?.slice(cookieName.length + 1) || '';
+    if (!record || !timingSafeEqual(Buffer.from(record.csrfHash), Buffer.from(tokenHash(csrf))) ||
+        !timingSafeEqual(Buffer.from(record.browserHash), Buffer.from(tokenHash(cookie)))) { invalid(); return; }
+    const consumed = await this.store.take<ConsentRecord>(`consent:${consent}`);
+    if (!consumed || consumed.grant.gitlabExpiresAt <= Date.now()) { invalid(); return; }
+    res.clearCookie(cookieName, { httpOnly: true, secure, sameSite: 'strict', path: '/' });
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    const redirect = new URL(consumed.grant.redirectUri);
+    if (decision === 'allow') {
+      const code = randomToken();
+      await this.store.set(tokenKey('code', code), consumed.grant, AUTH_FLOW_TTL_MS);
+      redirect.searchParams.set('code', code);
+    } else {
+      redirect.searchParams.set('error', 'access_denied');
+    }
+    if (consumed.grant.clientState) redirect.searchParams.set('state', consumed.grant.clientState);
     res.redirect(redirect.toString());
   }
 
-  /** SDK calls this to validate the MCP client's PKCE verifier at token exchange. */
-  async challengeForAuthorizationCode(
-    _client: OAuthClientInformationFull,
-    authorizationCode: string
-  ): Promise<string> {
-    const record = await this.store.get<IssuedCode>(`code:${authorizationCode}`);
-    if (!record) {
-      throw new InvalidGrantError('Authorization code is invalid or expired');
-    }
+  /** SDK validates PKCE before atomically consuming a code. */
+  async challengeForAuthorizationCode(client: OAuthClientInformationFull, code: string): Promise<string> {
+    const record = await this.store.get<IssuedCode>(tokenKey('code', code));
+    if (!record || record.clientId !== client.client_id) throw new InvalidGrantError('Authorization code is invalid or expired');
     return record.clientCodeChallenge;
   }
 
-  /** Step 3: client exchanges the one-time MCP code for an MCP bearer token. */
   async exchangeAuthorizationCode(
-    client: OAuthClientInformationFull,
-    authorizationCode: string
+    client: OAuthClientInformationFull, code: string, _verifier?: string, redirectUri?: string, resource?: URL,
   ): Promise<OAuthTokens> {
-    const record = await this.store.get<IssuedCode>(`code:${authorizationCode}`);
-    if (!record) {
-      throw new InvalidGrantError('Authorization code is invalid or expired');
-    }
-    // One-time use.
-    await this.store.del(`code:${authorizationCode}`);
-    if (record.clientId !== client.client_id) {
-      throw new InvalidGrantError('Authorization code was issued to a different client');
-    }
-    return this.mintTokens(record);
+    const key = tokenKey('code', code);
+    const record = await this.store.get<IssuedCode>(key);
+    if (!record || record.clientId !== client.client_id) throw new InvalidGrantError('Authorization code is invalid or expired');
+    if (redirectUri && redirectUri !== record.redirectUri) throw new InvalidGrantError('Authorization redirect URI does not match');
+    if (resource && resource.toString().replace(/\/$/, '') !== this.opts.serverUrl.replace(/\/$/, '')) throw new InvalidTargetError('Resource does not match');
+    const consumed = await this.store.take<IssuedCode>(key);
+    if (!consumed) throw new InvalidGrantError('Authorization code is invalid or expired');
+    return this.mintTokens(consumed);
   }
 
-  async exchangeRefreshToken(
-    client: OAuthClientInformationFull,
-    refreshToken: string
-  ): Promise<OAuthTokens> {
-    const record = await this.store.get<RefreshTokenRecord>(`rt:${refreshToken}`);
-    if (!record) {
-      throw new InvalidGrantError('Refresh token is invalid');
-    }
-    if (record.clientId !== client.client_id) {
-      throw new InvalidGrantError('Refresh token was issued to a different client');
-    }
-
-    let tokens;
+  async exchangeRefreshToken(client: OAuthClientInformationFull, refreshToken: string, scopes?: string[], resource?: URL): Promise<OAuthTokens> {
+    const key = tokenKey('rt', refreshToken);
+    const record = await this.store.get<RefreshTokenRecord>(key);
+    if (!record || record.clientId !== client.client_id) throw new InvalidGrantError('Refresh token is invalid');
+    if (scopes?.some(scope => !record.scopes.includes(scope))) throw new InvalidGrantError('Refresh scope cannot expand the grant');
+    if (resource && resource.toString().replace(/\/$/, '') !== this.opts.serverUrl.replace(/\/$/, '')) throw new InvalidTargetError('Resource does not match');
+    const consumed = await this.store.take<RefreshTokenRecord>(key);
+    if (!consumed) throw new InvalidGrantError('Refresh token is invalid');
+    // Retain a short revocation window for logout racing with rotation without
+    // accumulating a month of consumed-token indexes for every active user.
+    await this.store.set(`token:${tokenHash(refreshToken)}`, { familyId: consumed.familyId, clientId: consumed.clientId }, AUTH_FLOW_TTL_MS);
+    await this.store.del(`at:${consumed.accessTokenHash}`);
+    if (!await this.familyActive(consumed.familyId, client.client_id)) throw new InvalidGrantError('Token family is revoked or expired');
     try {
-      tokens = await this.gitlabTokenRequest({
-        grant_type: 'refresh_token',
-        refresh_token: record.gitlabRefreshToken,
-      });
-    } catch (err) {
-      throw new ServerError(`Failed to refresh GitLab token: ${(err as Error).message}`);
+      const tokens = await this.gitlabTokenRequest({ grant_type: 'refresh_token', refresh_token: consumed.gitlabRefreshToken });
+      if (!await this.userIsInAllowedGroup(tokens.access_token)) throw new InvalidGrantError('GitLab account is no longer in an allowed group');
+      return await this.mintTokens({
+        clientId: consumed.clientId, clientCodeChallenge: '', redirectUri: '',
+        scopes: scopes?.length ? scopes : consumed.scopes, resource: consumed.resource,
+        gitlabAccessToken: tokens.access_token, gitlabRefreshToken: tokens.refresh_token ?? consumed.gitlabRefreshToken,
+        gitlabExpiresAt: Date.now() + (tokens.expires_in ? tokens.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS),
+      }, consumed.familyId);
+    } catch (error) {
+      await this.store.del(`family:${consumed.familyId}`);
+      if (error instanceof InvalidGrantError) throw error;
+      throw new ServerError('GitLab refresh failed; restart sign-in');
     }
+  }
 
-    // Rotate: drop the old refresh token and revoke its paired access token so a
-    // stolen access token can't outlive a refresh.
-    await this.store.del(`rt:${refreshToken}`);
-    await this.store.del(`at:${record.accessToken}`);
-    return this.mintTokens({
-      clientId: record.clientId,
-      clientCodeChallenge: '',
-      redirectUri: '',
-      scopes: record.scopes,
-      resource: record.resource,
-      gitlabAccessToken: tokens.access_token,
-      gitlabRefreshToken: tokens.refresh_token ?? record.gitlabRefreshToken,
-      gitlabExpiresAt: Date.now() + (tokens.expires_in ? tokens.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS),
-    });
+  private async familyActive(id: string, clientId: string): Promise<boolean> {
+    const family = await this.store.get<TokenFamily>(`family:${id}`);
+    return family?.clientId === clientId;
   }
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
-    const record = await this.store.get<AccessTokenRecord>(`at:${token}`);
-    if (!record) {
-      throw new InvalidTokenError('Unknown or revoked access token');
-    }
-    if (record.expiresAt * 1000 < Date.now()) {
-      await this.store.del(`at:${token}`);
-      throw new InvalidTokenError('Access token has expired');
+    const record = await this.store.get<AccessTokenRecord>(tokenKey('at', token));
+    if (!record || record.expiresAt * 1000 <= Date.now() || !await this.familyActive(record.familyId, record.clientId)) {
+      throw new InvalidTokenError('Unknown, expired, or revoked access token');
     }
     return {
-      token,
-      clientId: record.clientId,
-      scopes: record.scopes,
-      expiresAt: record.expiresAt,
-      resource: record.resource ? new URL(record.resource) : new URL(this.opts.serverUrl),
-      // The per-user GitLab token rides in `extra` so the tool layer can act as the
-      // authenticated user without the GitLab token ever leaving the server.
-      extra: { gitlabToken: record.gitlabAccessToken },
+      token, clientId: record.clientId, scopes: record.scopes, expiresAt: record.expiresAt,
+      resource: new URL(record.resource || this.opts.serverUrl), extra: { gitlabToken: record.gitlabAccessToken },
     };
   }
 
-  async revokeToken(
-    _client: OAuthClientInformationFull,
-    request: OAuthTokenRevocationRequest
-  ): Promise<void> {
-    await this.store.del(`at:${request.token}`);
-    await this.store.del(`rt:${request.token}`);
+  async revokeToken(client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
+    // The index survives rotation/consumption so logout also wins against an
+    // in-flight refresh. It contains hashes and family ownership, never tokens.
+    const hash = tokenHash(request.token);
+    const record = await this.store.get<{ familyId: string; clientId: string }>(`token:${hash}`);
+    if (!record || record.clientId !== client.client_id) return;
+    await this.store.del(`family:${record.familyId}`);
+    await this.store.del(`at:${hash}`);
+    await this.store.del(`rt:${hash}`);
   }
 
-  dispose(): void {
-    this.store.dispose();
-  }
+  dispose(): void { this.store.dispose(); }
 
-  // --- internals -----------------------------------------------------------
-
-  private async mintTokens(record: IssuedCode): Promise<OAuthTokens> {
+  private async mintTokens(record: IssuedCode, existingFamily?: string): Promise<OAuthTokens> {
+    const ttlMs = record.gitlabExpiresAt - Date.now();
+    if (ttlMs <= 0) throw new InvalidGrantError('GitLab authorization has expired; restart sign-in');
+    const familyId = existingFamily || randomToken();
+    if (existingFamily) {
+      if (!await this.familyActive(familyId, record.clientId)) throw new InvalidGrantError('Token family is revoked or expired');
+    } else {
+      await this.store.set<TokenFamily>(`family:${familyId}`, { clientId: record.clientId }, REFRESH_TOKEN_TTL_MS);
+    }
     const accessToken = randomToken();
     const refreshToken = randomToken();
-    const ttlMs = Math.max(0, record.gitlabExpiresAt - Date.now()) || DEFAULT_TOKEN_TTL_MS;
-    const expiresAtSec = Math.floor((Date.now() + ttlMs) / 1000);
-
-    await this.store.set<AccessTokenRecord>(
-      `at:${accessToken}`,
-      {
-        clientId: record.clientId,
-        scopes: record.scopes,
-        resource: record.resource,
-        gitlabAccessToken: record.gitlabAccessToken,
-        expiresAt: expiresAtSec,
-      },
-      ttlMs
-    );
-
-    if (record.gitlabRefreshToken) {
-      await this.store.set<RefreshTokenRecord>(
-        `rt:${refreshToken}`,
-        {
-          clientId: record.clientId,
-          scopes: record.scopes,
-          resource: record.resource,
-          gitlabRefreshToken: record.gitlabRefreshToken,
-          accessToken,
-        },
-        REFRESH_TOKEN_TTL_MS
-      );
-    }
-
-    return {
-      access_token: accessToken,
-      token_type: 'Bearer',
-      expires_in: Math.floor(ttlMs / 1000),
-      scope: record.scopes.join(' '),
-      ...(record.gitlabRefreshToken ? { refresh_token: refreshToken } : {}),
-    };
+    const expiresAt = Math.floor((Date.now() + ttlMs) / 1000);
+    await this.store.set(`token:${tokenHash(accessToken)}`, { familyId, clientId: record.clientId }, ttlMs);
+    if (record.gitlabRefreshToken) await this.store.set(`token:${tokenHash(refreshToken)}`, { familyId, clientId: record.clientId }, REFRESH_TOKEN_TTL_MS);
+    await this.store.set<AccessTokenRecord>(tokenKey('at', accessToken), {
+      familyId, clientId: record.clientId, scopes: record.scopes, resource: record.resource,
+      gitlabAccessToken: record.gitlabAccessToken, expiresAt,
+    }, ttlMs);
+    if (record.gitlabRefreshToken) await this.store.set<RefreshTokenRecord>(tokenKey('rt', refreshToken), {
+      familyId, clientId: record.clientId, scopes: record.scopes, resource: record.resource,
+      gitlabRefreshToken: record.gitlabRefreshToken, accessTokenHash: tokenHash(accessToken),
+    }, REFRESH_TOKEN_TTL_MS);
+    return { access_token: accessToken, token_type: 'Bearer', expires_in: Math.floor(ttlMs / 1000),
+      scope: record.scopes.join(' '), ...(record.gitlabRefreshToken ? { refresh_token: refreshToken } : {}) };
   }
 
   /**

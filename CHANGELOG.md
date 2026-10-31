@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-31
+
+### Security
+- Atomically consume authorization codes, pending OAuth state, consent grants, and refresh tokens in memory and Redis; concurrent exchanges cannot reuse one-time credentials.
+- Bind revocation to the owning client and invalidate the complete token family, including logout racing with refresh. Recheck configured GitLab group membership on refresh and fail closed on denial or upstream errors. Grants have a 30-day absolute lifetime.
+- Require explicit approval of each MCP client after GitLab sign-in. Consent shows the client and exact redirect URI, escapes metadata, binds a CSRF nonce to an HttpOnly browser cookie, prevents replay, and disallows framing/scripts and caching.
+- Encrypt Redis OAuth values with AES-256-GCM bound to the storage key/namespace. Hash opaque token keys; require an encryption key and TLS unless loopback or explicitly opted into a trusted private network.
+- Bound HTTP sessions globally and per credential, request rates and concurrent HTTP work, queued GitLab requests and queue wait, buffered/decompressed response bytes, and in-memory OAuth state. Return clear overload/limit errors instead of allowing unbounded growth.
+- Pin GitHub Actions to commit SHAs and Node/Redis images to verified digests. Exercise encrypted state and one-time consumption against real Redis in CI.
+- Update development glob/minimatch through tested overrides to remove moderate-severity advisories; CI now gates moderate-or-higher findings across the full dependency tree as well as production. Five low-severity findings remain in Jest/deepmerge pending an upstream fix.
+
+### Breaking changes
+- Redis-backed OAuth requires `OAUTH_STORAGE_ENCRYPTION_KEY` (64 hex characters); non-loopback plaintext transport requires explicit `REDIS_ALLOW_INSECURE=true`. All OAuth users reconnect and sign in again after the namespace migration.
+- New HTTP and outbound request limits apply by default. Large deployments can tune the documented limits; `GITLAB_MAX_CONCURRENCY=0` remains an explicit concurrency opt-out.
+- GitLab login now includes a separate MCP-client consent screen, and refresh failures require reauthentication.
+
 ## [3.0.0] - 2026-10-31
 
 ### Breaking changes
